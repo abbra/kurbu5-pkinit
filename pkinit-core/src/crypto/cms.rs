@@ -98,7 +98,7 @@ pub fn create_signed_data(
 
     // SignedData
     let signed_data = SignedData {
-        version: synta::Integer::from_i64(1),
+        version: synta::Integer::from_i64(3),
         digest_algorithms: SetOf::from_vec(vec![digest_alg]),
         encap_content_info: eci,
         certificates: if certs_content.is_empty() {
@@ -239,6 +239,91 @@ pub fn verify_signed_data(content_info_der: &[u8]) -> Result<VerifiedSignedData,
         signer_cert_der,
         all_certs_der,
     })
+}
+
+/// Extract eContent from a CMS SignedData that has no SignerInfos (anonymous PKINIT).
+///
+/// Returns `Ok((content, content_type_oid))` when the input is a valid
+/// ContentInfo → SignedData with zero signers.  Returns `Err` otherwise.
+pub fn extract_unsigned_content(
+    content_info_der: &[u8],
+) -> Result<(Vec<u8>, Vec<u32>), PkinitError> {
+    let ci = pkcs7_types::ContentInfo::from_der(content_info_der)
+        .map_err(|e| PkinitError::CmsVerifyFailed(format!("parse ContentInfo: {e}")))?;
+
+    let expected_oid = ObjectIdentifier::new(pkcs7_types::ID_SIGNED_DATA)
+        .map_err(|_| PkinitError::CmsVerifyFailed("invalid id-signedData OID".into()))?;
+    if ci.content_type != expected_oid {
+        return Err(PkinitError::CmsContentTypeMismatch {
+            expected: "id-signedData".into(),
+            actual: format!("{}", ci.content_type),
+        });
+    }
+
+    let mut outer_dec = Decoder::new(ci.content.as_bytes(), Encoding::Der);
+    let sd_inner = outer_dec
+        .enter_constructed(Tag::context_specific_constructed(0))
+        .map_err(|e| PkinitError::CmsVerifyFailed(format!("unwrap [0] EXPLICIT: {e}")))?;
+    let sd_bytes = sd_inner.remaining();
+
+    let signed_data = SignedData::from_der(sd_bytes)
+        .map_err(|e| PkinitError::CmsVerifyFailed(format!("parse SignedData: {e}")))?;
+
+    if !signed_data.signer_infos.elements().is_empty() {
+        return Err(PkinitError::CmsVerifyFailed(
+            "SignedData has signers; expected unsigned anonymous content".into(),
+        ));
+    }
+
+    let e_content = signed_data
+        .encap_content_info
+        .e_content
+        .as_ref()
+        .ok_or_else(|| PkinitError::CmsVerifyFailed("no eContent in SignedData".into()))?;
+
+    let content_type = signed_data
+        .encap_content_info
+        .e_content_type
+        .components()
+        .to_vec();
+
+    Ok((e_content.as_bytes().to_vec(), content_type))
+}
+
+/// Create a CMS SignedData wrapped in ContentInfo with no signers (anonymous PKINIT).
+pub fn create_unsigned_data(content: &[u8], content_oid: &[u32]) -> Result<Vec<u8>, PkinitError> {
+    let e_content_type = ObjectIdentifier::new(content_oid)
+        .map_err(|e| PkinitError::CmsSignFailed(format!("eContentType OID: {e}")))?;
+
+    let eci = EncapsulatedContentInfo {
+        e_content_type,
+        e_content: Some(OctetStringRef::new(content)),
+    };
+
+    let signed_data = SignedData {
+        version: synta::Integer::from_i64(3),
+        digest_algorithms: SetOf::from_vec(vec![]),
+        encap_content_info: eci,
+        certificates: None,
+        crls: None,
+        signer_infos: SetOf::from_vec(vec![]),
+    };
+    let sd_der = signed_data
+        .to_der()
+        .map_err(|e| PkinitError::CmsSignFailed(format!("encode SignedData: {e}")))?;
+
+    let explicit_0 = ExplicitTag::context_specific(0, RawDer(sd_der.as_slice()))
+        .to_der()
+        .map_err(|e| PkinitError::CmsSignFailed(format!("encode [0] EXPLICIT: {e}")))?;
+    let id_signed_data = ObjectIdentifier::new(pkcs7_types::ID_SIGNED_DATA)
+        .map_err(|_| PkinitError::CmsSignFailed("invalid id-signedData OID".into()))?;
+    let content_info = pkcs7_types::ContentInfo {
+        content_type: id_signed_data,
+        content: RawDer(&explicit_0),
+    };
+    content_info
+        .to_der()
+        .map_err(|e| PkinitError::CmsSignFailed(format!("encode ContentInfo: {e}")))
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────────
@@ -593,5 +678,17 @@ mod tests {
             "md5",
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn unsigned_round_trip() {
+        let content = b"anonymous auth pack";
+        let content_oid: &[u32] = &[1, 3, 6, 1, 5, 2, 3, 1];
+
+        let ci_der = create_unsigned_data(content, content_oid).expect("create unsigned data");
+
+        let (extracted, ct) = extract_unsigned_content(&ci_der).expect("extract unsigned content");
+        assert_eq!(extracted, content);
+        assert_eq!(ct.as_slice(), content_oid);
     }
 }
