@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 # tests/system/pkinit/run.sh -- PKINIT system integration test
 #
-# Starts an ephemeral MIT KDC with the kurbu5-pkinit plugin,
-# generates PKINIT certs, and verifies kinit works with both
-# normal and anonymous PKINIT.
+# Starts an ephemeral MIT KDC and verifies kinit works with both
+# normal and anonymous PKINIT across plugin combinations.
+#
+# Combos:
+#   us-us   -- kurbu5-pkinit KDC + kurbu5-pkinit client
+#   us-mit  -- kurbu5-pkinit KDC + MIT pkinit client
+#   mit-us  -- MIT pkinit KDC   + kurbu5-pkinit client
+#   mit-mit -- MIT pkinit KDC   + MIT pkinit client (baseline)
+#
+# Usage:
+#   bash run.sh                    # run all combos (MIT combos skipped if pkinit.so missing)
+#   bash run.sh --combo us-mit     # run a single combo
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -12,23 +21,23 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 KDC_PORTBASE="${KDC_PORTBASE:-63100}"
 REALM="${REALM:-PKINIT.TEST}"
 PRINCIPAL="${PRINCIPAL:-user}"
+MIT_PKINIT_SO="${MIT_PKINIT_SO:-/usr/lib64/krb5/plugins/preauth/pkinit.so}"
 
-TESTDIR="$(mktemp -d /tmp/pkinit-test.XXXXXXXXXX)"
-ENV_FILE="$TESTDIR/env.sh"
-SETUP_PID=""
-PASS=0
-FAIL=0
+COMBO_ARG="all"
+TOTAL_PASS=0
+TOTAL_FAIL=0
+TOTAL_SKIP=0
+
+# -- Argument parsing --
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --combo) COMBO_ARG="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
 
 # -- Helpers --
-
-cleanup() {
-    if [[ -n "$SETUP_PID" ]]; then
-        kill "$SETUP_PID" 2>/dev/null || true
-        wait "$SETUP_PID" 2>/dev/null || true
-    fi
-    rm -rf "$TESTDIR"
-}
-trap cleanup EXIT INT TERM
 
 require_tools() {
     local missing=()
@@ -42,13 +51,16 @@ require_tools() {
 }
 
 report() {
-    local label="$1" result="$2"
+    local combo="$1" label="$2" result="$3"
     if [[ "$result" == "PASS" ]]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
+        echo "  [$combo] PASS: $label"
+        TOTAL_PASS=$((TOTAL_PASS + 1))
+    elif [[ "$result" == "SKIP" ]]; then
+        echo "  [$combo] SKIP: $label"
+        TOTAL_SKIP=$((TOTAL_SKIP + 1))
     else
-        echo "  FAIL: $label"
-        FAIL=$((FAIL + 1))
+        echo "  [$combo] FAIL: $label"
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
     fi
 }
 
@@ -64,93 +76,180 @@ if [[ ! -f "$PLUGIN_SO" ]]; then
     cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" -p kurbu5-pkinit
 fi
 
-# -- Start ephemeral KDC with PKINIT --
+# -- Determine combos to run --
 
-echo "Starting ephemeral KDC (realm=$REALM, port=$KDC_PORTBASE)..."
-python3 "$SCRIPT_DIR/setup.py" \
-    --testdir "$TESTDIR/kdc" \
-    --portbase "$KDC_PORTBASE" \
-    --realm "$REALM" \
-    --principal "$PRINCIPAL" \
-    --plugin-so "$PLUGIN_SO" \
-    --env-file "$ENV_FILE" &
-SETUP_PID=$!
+ALL_COMBOS=(us-us us-mit mit-us mit-mit)
+if [[ "$COMBO_ARG" == "all" ]]; then
+    COMBOS=("${ALL_COMBOS[@]}")
+else
+    COMBOS=("$COMBO_ARG")
+fi
 
-for i in $(seq 1 60); do
-    [[ -f "$ENV_FILE" ]] && break
-    if ! kill -0 "$SETUP_PID" 2>/dev/null; then
-        echo "FATAL: KDC setup process died before producing env file." >&2
-        cat "$TESTDIR/kdc/kdc.log" 2>/dev/null || true
-        exit 1
+HAS_MIT_PKINIT=false
+if [[ -f "$MIT_PKINIT_SO" ]]; then
+    HAS_MIT_PKINIT=true
+fi
+
+# -- Per-combo test runner --
+
+run_combo() {
+    local combo="$1" kdc_so="$2" client_so="$3" port_offset="$4"
+    local port=$((KDC_PORTBASE + port_offset))
+    local TESTDIR
+    TESTDIR="$(mktemp -d /tmp/pkinit-test-${combo}.XXXXXXXXXX)"
+    local ENV_FILE="$TESTDIR/env.sh"
+    local SETUP_PID=""
+    local FAIL_BEFORE=$TOTAL_FAIL
+
+    echo
+    echo "=== Combo: $combo (KDC=$(basename "$kdc_so"), Client=$(basename "$client_so")) ==="
+
+    # Start ephemeral KDC
+    python3 "$SCRIPT_DIR/setup.py" \
+        --testdir "$TESTDIR/kdc" \
+        --portbase "$port" \
+        --realm "$REALM" \
+        --principal "$PRINCIPAL" \
+        --kdc-plugin-so "$kdc_so" \
+        --client-plugin-so "$client_so" \
+        --env-file "$ENV_FILE" &
+    SETUP_PID=$!
+
+    for i in $(seq 1 60); do
+        [[ -f "$ENV_FILE" ]] && break
+        if ! kill -0 "$SETUP_PID" 2>/dev/null; then
+            echo "  [$combo] FATAL: KDC setup process died before producing env file." >&2
+            cat "$TESTDIR/kdc/kdc.log" 2>/dev/null || true
+            report "$combo" "KDC startup" "FAIL"
+            report "$combo" "klist TGT" "FAIL"
+            report "$combo" "anonymous kinit" "FAIL"
+            report "$combo" "anonymous TGT" "FAIL"
+            return
+        fi
+        sleep 0.5
+    done
+
+    if [[ ! -f "$ENV_FILE" ]]; then
+        echo "  [$combo] FATAL: KDC setup did not produce env file within 30s." >&2
+        report "$combo" "KDC startup" "FAIL"
+        report "$combo" "klist TGT" "FAIL"
+        report "$combo" "anonymous kinit" "FAIL"
+        report "$combo" "anonymous TGT" "FAIL"
+        return
     fi
-    sleep 0.5
+
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+
+    # Test 1: Normal PKINIT kinit
+    if KRB5_CONFIG="$KRB5_CONFIG" \
+       KRB5CCNAME="$KRB5CCNAME" \
+       kinit "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" </dev/null 2>&1; then
+        report "$combo" "kinit succeeded" "PASS"
+    else
+        report "$combo" "kinit failed" "FAIL"
+    fi
+
+    # Test 2: Validate TGT
+    KLIST_OUTPUT=$(KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME="$KRB5CCNAME" klist 2>&1) || true
+    if echo "$KLIST_OUTPUT" | grep -q "krbtgt/${PKINIT_REALM}@${PKINIT_REALM}"; then
+        report "$combo" "TGT present" "PASS"
+    else
+        report "$combo" "TGT not found" "FAIL"
+        echo "$KLIST_OUTPUT"
+    fi
+
+    # Test 3: Anonymous PKINIT
+    ANON_CCACHE="FILE:$TESTDIR/ccache-anon"
+    if KRB5_CONFIG="$KRB5_CONFIG" \
+       KRB5CCNAME="$ANON_CCACHE" \
+       kinit -n "@${PKINIT_REALM}" </dev/null 2>&1; then
+        report "$combo" "anonymous kinit succeeded" "PASS"
+    else
+        report "$combo" "anonymous kinit failed" "FAIL"
+    fi
+
+    # Test 4: Validate anonymous TGT
+    ANON_KLIST=$(KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME="$ANON_CCACHE" klist 2>&1) || true
+    if echo "$ANON_KLIST" | grep -q "WELLKNOWN/ANONYMOUS"; then
+        report "$combo" "anonymous TGT present" "PASS"
+    else
+        report "$combo" "anonymous TGT not found" "FAIL"
+        echo "$ANON_KLIST"
+    fi
+
+    # Dump KDC log on per-combo failure
+    if [[ $TOTAL_FAIL -gt $FAIL_BEFORE ]]; then
+        echo
+        echo "  [$combo] KDC log:"
+        cat "$TESTDIR/kdc/kdc.log" 2>/dev/null || true
+    fi
+
+    # Cleanup
+    if [[ -n "$SETUP_PID" ]]; then
+        kill "$SETUP_PID" 2>/dev/null || true
+        wait "$SETUP_PID" 2>/dev/null || true
+    fi
+    rm -rf "$TESTDIR"
+}
+
+# -- Run selected combos --
+
+COMBO_INDEX=0
+for combo in "${COMBOS[@]}"; do
+    case "$combo" in
+        us-us)
+            run_combo "$combo" "$PLUGIN_SO" "$PLUGIN_SO" $((COMBO_INDEX * 10))
+            ;;
+        us-mit)
+            if $HAS_MIT_PKINIT; then
+                run_combo "$combo" "$PLUGIN_SO" "$MIT_PKINIT_SO" $((COMBO_INDEX * 10))
+            else
+                echo
+                echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
+                report "$combo" "kinit" "SKIP"
+                report "$combo" "klist" "SKIP"
+                report "$combo" "anonymous kinit" "SKIP"
+                report "$combo" "anonymous TGT" "SKIP"
+            fi
+            ;;
+        mit-us)
+            if $HAS_MIT_PKINIT; then
+                run_combo "$combo" "$MIT_PKINIT_SO" "$PLUGIN_SO" $((COMBO_INDEX * 10))
+            else
+                echo
+                echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
+                report "$combo" "kinit" "SKIP"
+                report "$combo" "klist" "SKIP"
+                report "$combo" "anonymous kinit" "SKIP"
+                report "$combo" "anonymous TGT" "SKIP"
+            fi
+            ;;
+        mit-mit)
+            if $HAS_MIT_PKINIT; then
+                run_combo "$combo" "$MIT_PKINIT_SO" "$MIT_PKINIT_SO" $((COMBO_INDEX * 10))
+            else
+                echo
+                echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
+                report "$combo" "kinit" "SKIP"
+                report "$combo" "klist" "SKIP"
+                report "$combo" "anonymous kinit" "SKIP"
+                report "$combo" "anonymous TGT" "SKIP"
+            fi
+            ;;
+        *)
+            echo "Unknown combo: $combo" >&2
+            echo "Valid combos: us-us, us-mit, mit-us, mit-mit, all" >&2
+            exit 1
+            ;;
+    esac
+    COMBO_INDEX=$((COMBO_INDEX + 1))
 done
-
-if [[ ! -f "$ENV_FILE" ]]; then
-    echo "FATAL: KDC setup did not produce env file within 30s." >&2
-    exit 1
-fi
-
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-echo "KDC running, env sourced."
-
-# -- Test 1: Normal PKINIT kinit --
-
-echo
-echo "Test 1: kinit with PKINIT (normal)"
-if KRB5_CONFIG="$KRB5_CONFIG" \
-   KRB5CCNAME="$KRB5CCNAME" \
-   kinit "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" </dev/null 2>&1; then
-    report "kinit succeeded" "PASS"
-else
-    report "kinit failed" "FAIL"
-fi
-
-# -- Test 2: Validate TGT --
-
-echo
-echo "Test 2: klist shows valid ticket"
-KLIST_OUTPUT=$(KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME="$KRB5CCNAME" klist 2>&1) || true
-if echo "$KLIST_OUTPUT" | grep -q "krbtgt/${PKINIT_REALM}@${PKINIT_REALM}"; then
-    report "TGT present" "PASS"
-else
-    report "TGT not found" "FAIL"
-    echo "$KLIST_OUTPUT"
-fi
-
-# -- Test 3: Anonymous PKINIT --
-
-echo
-echo "Test 3: kinit with anonymous PKINIT"
-ANON_CCACHE="FILE:$TESTDIR/ccache-anon"
-if KRB5_CONFIG="$KRB5_CONFIG" \
-   KRB5CCNAME="$ANON_CCACHE" \
-   kinit -n "@${PKINIT_REALM}" </dev/null 2>&1; then
-    report "anonymous kinit succeeded" "PASS"
-else
-    report "anonymous kinit failed" "FAIL"
-fi
-
-# -- Test 4: Validate anonymous TGT --
-
-echo
-echo "Test 4: klist shows anonymous TGT"
-ANON_KLIST=$(KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME="$ANON_CCACHE" klist 2>&1) || true
-if echo "$ANON_KLIST" | grep -q "WELLKNOWN/ANONYMOUS"; then
-    report "anonymous TGT present" "PASS"
-else
-    report "anonymous TGT not found" "FAIL"
-    echo "$ANON_KLIST"
-fi
 
 # -- Summary --
 
 echo
-echo "Results: $PASS passed, $FAIL failed"
-if [[ "$FAIL" -gt 0 ]]; then
-    echo
-    echo "KDC log:"
-    cat "$TESTDIR/kdc/kdc.log" 2>/dev/null || true
+echo "Results: $TOTAL_PASS passed, $TOTAL_FAIL failed, $TOTAL_SKIP skipped"
+if [[ "$TOTAL_FAIL" -gt 0 ]]; then
     exit 1
 fi
