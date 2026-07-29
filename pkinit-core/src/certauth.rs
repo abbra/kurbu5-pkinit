@@ -93,10 +93,7 @@ pub fn verify_kdc_san(
 
     if let Some(hostname) = kdc_hostname {
         let dns_names = san::extract_dns_names(cert_der)?;
-        if dns_names
-            .iter()
-            .any(|d| d.eq_ignore_ascii_case(hostname))
-        {
+        if dns_names.iter().any(|d| d.eq_ignore_ascii_case(hostname)) {
             return Ok(());
         }
     }
@@ -360,10 +357,9 @@ mod tests {
             .add_oid(constants::ID_PKINIT_KPCLIENT_AUTH)
             .build()
             .unwrap();
-        let ku_der = synta_certificate::encode_key_usage(
-            1 << synta_certificate::KEY_USAGE_KEY_AGREEMENT,
-        )
-        .unwrap();
+        let ku_der =
+            synta_certificate::encode_key_usage(1 << synta_certificate::KEY_USAGE_KEY_AGREEMENT)
+                .unwrap();
         let cert = build_cert_with_extensions(
             key.as_ref(),
             &spki,
@@ -414,23 +410,13 @@ mod tests {
     #[test]
     fn verify_kdc_san_accepts_dns_name_fallback() {
         let cert = build_kdc_cert("EXAMPLE.COM", &["kdc.example.com"]);
-        verify_kdc_san(
-            &cert,
-            "krbtgt/OTHER.COM@OTHER.COM",
-            Some("kdc.example.com"),
-        )
-        .unwrap();
+        verify_kdc_san(&cert, "krbtgt/OTHER.COM@OTHER.COM", Some("kdc.example.com")).unwrap();
     }
 
     #[test]
     fn verify_kdc_san_dns_case_insensitive() {
         let cert = build_kdc_cert("EXAMPLE.COM", &["KDC.EXAMPLE.COM"]);
-        verify_kdc_san(
-            &cert,
-            "krbtgt/OTHER.COM@OTHER.COM",
-            Some("kdc.example.com"),
-        )
-        .unwrap();
+        verify_kdc_san(&cert, "krbtgt/OTHER.COM@OTHER.COM", Some("kdc.example.com")).unwrap();
     }
 
     // -- verify_kdc_eku --

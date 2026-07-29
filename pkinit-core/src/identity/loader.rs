@@ -29,15 +29,11 @@ impl PkinitIdentity {
 
         let cert_blocks =
             synta_certificate::read_pki_blocks(&cert_data, b"", Some(&OpensslDecryptor))
-                .map_err(|e| {
-                    PkinitError::IdentityLoadFailed(format!("parsing cert file: {e}"))
-                })?;
+                .map_err(|e| PkinitError::IdentityLoadFailed(format!("parsing cert file: {e}")))?;
 
         let key_blocks =
             synta_certificate::read_pki_blocks(&key_data, b"", Some(&OpensslDecryptor))
-                .map_err(|e| {
-                    PkinitError::IdentityLoadFailed(format!("parsing key file: {e}"))
-                })?;
+                .map_err(|e| PkinitError::IdentityLoadFailed(format!("parsing key file: {e}")))?;
 
         let (cert_der, chain) = extract_cert_and_chain(&cert_blocks)?;
         let key_der = extract_private_key(&key_blocks)?;
@@ -59,9 +55,8 @@ impl PkinitIdentity {
         })?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| {
-                PkinitError::IdentityLoadFailed(format!("reading dir entry: {e}"))
-            })?;
+            let entry = entry
+                .map_err(|e| PkinitError::IdentityLoadFailed(format!("reading dir entry: {e}")))?;
             let path = entry.path();
             if !path.is_file() {
                 continue;
@@ -92,9 +87,7 @@ impl PkinitIdentity {
         })?;
 
         let pki = synta_certificate::pki_from_pkcs12(&data, password, &OpensslDecryptor)
-            .map_err(|e| {
-                PkinitError::IdentityLoadFailed(format!("parsing PKCS#12: {e}"))
-            })?;
+            .map_err(|e| PkinitError::IdentityLoadFailed(format!("parsing PKCS#12: {e}")))?;
 
         let cert_der = pki
             .certs
@@ -104,13 +97,9 @@ impl PkinitIdentity {
             })?
             .clone();
 
-        let key_der = pki
-            .keys
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                PkinitError::IdentityLoadFailed("PKCS#12 contains no private keys".into())
-            })?;
+        let key_der = pki.keys.into_iter().next().ok_or_else(|| {
+            PkinitError::IdentityLoadFailed("PKCS#12 contains no private keys".into())
+        })?;
 
         let chain = pki.certs.into_iter().skip(1).collect();
 
@@ -182,18 +171,16 @@ mod tests {
                 .unwrap()
                 .build()
                 .unwrap();
-            let mut kgen =
-                native_ossl::pkey::KeygenCtx::new(c"EC").unwrap();
+            let mut kgen = native_ossl::pkey::KeygenCtx::new(c"EC").unwrap();
             kgen.set_params(&params).unwrap();
             kgen.generate().unwrap()
         };
         let pkcs8_der = ossl_pkey.to_pkcs8_der().unwrap();
         let spki_der = ossl_pkey.public_key_to_der().unwrap();
 
-        let backend =
-            synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
-                pkcs8_der.clone(),
-            );
+        let backend = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+            pkcs8_der.clone(),
+        );
         let signer = synta_certificate::crypto::PrivateKey::as_signer(&backend, "sha256");
 
         let name = NameBuilder::new()
@@ -282,10 +269,7 @@ mod tests {
         let (ee_cert_der, ee_pkcs8_der) = generate_test_cert_and_key();
 
         let mut cert_pem = synta_certificate::der_to_pem("CERTIFICATE", &ee_cert_der);
-        cert_pem.extend_from_slice(&synta_certificate::der_to_pem(
-            "CERTIFICATE",
-            &ca_cert_der,
-        ));
+        cert_pem.extend_from_slice(&synta_certificate::der_to_pem("CERTIFICATE", &ca_cert_der));
         let key_pem = synta_certificate::der_to_pem("PRIVATE KEY", &ee_pkcs8_der);
 
         let dir = tempfile::tempdir().expect("tempdir");

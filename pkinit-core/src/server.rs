@@ -27,11 +27,7 @@ pub struct PkinitKdcState {
 }
 
 impl PkinitKdcState {
-    pub fn new(
-        identity: PkinitIdentity,
-        trust_store: TrustStore,
-        config: PkinitKdcConfig,
-    ) -> Self {
+    pub fn new(identity: PkinitIdentity, trust_store: TrustStore, config: PkinitKdcConfig) -> Self {
         Self {
             identity,
             trust_store,
@@ -131,9 +127,7 @@ impl PkinitKdcState {
         let client_dh_public = auth_pack
             .client_public_value
             .as_ref()
-            .ok_or_else(|| {
-                PkinitError::DhParamsRejected("missing client DH public value".into())
-            })?
+            .ok_or_else(|| PkinitError::DhParamsRejected("missing client DH public value".into()))?
             .to_der()
             .map_err(|e| PkinitError::Asn1(format!("encode client SPKI: {e}")))?;
 
@@ -142,8 +136,7 @@ impl PkinitKdcState {
         let nonce = pk_auth
             .nonce
             .as_i64()
-            .map_err(|e| PkinitError::Asn1(format!("nonce: {e}")))?
-            as i32;
+            .map_err(|e| PkinitError::Asn1(format!("nonce: {e}")))? as i32;
 
         let client_dh_nonce = auth_pack
             .client_dhnonce
@@ -199,10 +192,9 @@ impl PkinitKdcState {
             .to_der()
             .map_err(|e| PkinitError::Asn1(format!("encode KDCDHKeyInfo: {e}")))?;
 
-        let signer_key =
-            synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
-                self.identity.key_pkcs8_der.clone(),
-            );
+        let signer_key = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+            self.identity.key_pkcs8_der.clone(),
+        );
         let extra_certs: Vec<&[u8]> = self.identity.chain.iter().map(|c| c.as_slice()).collect();
 
         let signed_kdc_dh = cms::create_signed_data(
@@ -219,10 +211,8 @@ impl PkinitKdcState {
 
         let selected_kdf = kdf::pick_kdf_alg(&verified.supported_kdfs);
 
-        let kdf_alg_id = selected_kdf.map(|oid| {
-            synta_krb5::pkinit::KDFAlgorithmId {
-                kdf_id: synta::ObjectIdentifier::new(oid).unwrap(),
-            }
+        let kdf_alg_id = selected_kdf.map(|oid| synta_krb5::pkinit::KDFAlgorithmId {
+            kdf_id: synta::ObjectIdentifier::new(oid).unwrap(),
         });
 
         let dh_rep_info = synta_krb5::pkinit::DHRepInfo {
@@ -324,10 +314,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let ca_backend =
-            synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
-                ca_pkcs8.clone(),
-            );
+        let ca_backend = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+            ca_pkcs8.clone(),
+        );
         let ca_signer = synta_certificate::crypto::PrivateKey::as_signer(&ca_backend, "sha256");
 
         let ski_der = synta_certificate::encode_subject_key_identifier(
@@ -351,103 +340,93 @@ mod tests {
             .serial_number(Integer::from_i64(1))
             .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
             .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
-            .add_extension_oid(synta_certificate::oids::SUBJECT_KEY_IDENTIFIER, false, &ski_der)
-            .add_extension_oid(synta_certificate::oids::AUTHORITY_KEY_IDENTIFIER, false, &aki_der)
+            .add_extension_oid(
+                synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,
+                false,
+                &ski_der,
+            )
+            .add_extension_oid(
+                synta_certificate::oids::AUTHORITY_KEY_IDENTIFIER,
+                false,
+                &aki_der,
+            )
             .add_extension_oid(synta_certificate::oids::BASIC_CONSTRAINTS, true, &bc_der)
             .sign(&ca_signer)
             .unwrap();
 
-        let make_identity =
-            |cn: &str, san_oid_data: Vec<u8>, eku_oid: &[u32]| -> PkinitIdentity {
-                let pkey = {
-                    let params = native_ossl::params::ParamBuilder::new()
-                        .unwrap()
-                        .set(native_ossl::typed_params::ec::GROUP, c"P-256")
-                        .unwrap()
-                        .build()
-                        .unwrap();
-                    let mut kgen = native_ossl::pkey::KeygenCtx::new(c"EC").unwrap();
-                    kgen.set_params(&params).unwrap();
-                    kgen.generate().unwrap()
-                };
-                let pkcs8 = pkey.to_pkcs8_der().unwrap();
-                let spki = pkey.public_key_to_der().unwrap();
-                let name = NameBuilder::new().common_name(cn).build().unwrap();
-
-                let san_der = SubjectAlternativeNameBuilder::new()
-                    .other_name(&san_oid_data)
+        let make_identity = |cn: &str, san_oid_data: Vec<u8>, eku_oid: &[u32]| -> PkinitIdentity {
+            let pkey = {
+                let params = native_ossl::params::ParamBuilder::new()
+                    .unwrap()
+                    .set(native_ossl::typed_params::ec::GROUP, c"P-256")
+                    .unwrap()
                     .build()
                     .unwrap();
-                let eku_der = ExtendedKeyUsageBuilder::new()
-                    .add_oid(eku_oid)
-                    .build()
-                    .unwrap();
-                let ku_der = synta_certificate::encode_key_usage(
-                    1 << synta_certificate::KEY_USAGE_DIGITAL_SIGNATURE,
-                )
-                .unwrap();
-
-                let ee_ski = synta_certificate::encode_subject_key_identifier(
-                    &spki,
-                    synta_certificate::KeyIdMethod::Rfc5280Sha1,
-                    &synta_certificate::OpensslKeyIdHasher,
-                )
-                .unwrap();
-                let ee_aki = synta_certificate::encode_authority_key_identifier(
-                    &ca_spki,
-                    synta_certificate::KeyIdMethod::Rfc5280Sha1,
-                    &synta_certificate::OpensslKeyIdHasher,
-                )
-                .unwrap();
-
-                let cert_der = CertificateBuilder::new()
-                    .subject_name(&name)
-                    .issuer_name(&ca_name)
-                    .public_key_der(&spki)
-                    .serial_number(Integer::from_i64(2))
-                    .not_valid_before(Time::UtcTime(
-                        UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap(),
-                    ))
-                    .not_valid_after(Time::UtcTime(
-                        UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap(),
-                    ))
-                    .add_extension_oid(
-                        synta_certificate::oids::SUBJECT_ALT_NAME,
-                        false,
-                        &san_der,
-                    )
-                    .add_extension_oid(
-                        synta_certificate::oids::EXTENDED_KEY_USAGE,
-                        false,
-                        &eku_der,
-                    )
-                    .add_extension_oid(
-                        synta_certificate::oids::KEY_USAGE,
-                        true,
-                        &ku_der,
-                    )
-                    .add_extension_oid(
-                        synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,
-                        false,
-                        &ee_ski,
-                    )
-                    .add_extension_oid(
-                        synta_certificate::oids::AUTHORITY_KEY_IDENTIFIER,
-                        false,
-                        &ee_aki,
-                    )
-                    .sign(&ca_signer)
-                    .unwrap();
-
-                PkinitIdentity {
-                    cert_der,
-                    key_pkcs8_der: pkcs8,
-                    chain: vec![ca_cert_der.clone()],
-                }
+                let mut kgen = native_ossl::pkey::KeygenCtx::new(c"EC").unwrap();
+                kgen.set_params(&params).unwrap();
+                kgen.generate().unwrap()
             };
+            let pkcs8 = pkey.to_pkcs8_der().unwrap();
+            let spki = pkey.public_key_to_der().unwrap();
+            let name = NameBuilder::new().common_name(cn).build().unwrap();
 
-        let client_san =
-            synta_krb5::principal::encode_krb5_san("testuser", "EXAMPLE.COM").unwrap();
+            let san_der = SubjectAlternativeNameBuilder::new()
+                .other_name(&san_oid_data)
+                .build()
+                .unwrap();
+            let eku_der = ExtendedKeyUsageBuilder::new()
+                .add_oid(eku_oid)
+                .build()
+                .unwrap();
+            let ku_der = synta_certificate::encode_key_usage(
+                1 << synta_certificate::KEY_USAGE_DIGITAL_SIGNATURE,
+            )
+            .unwrap();
+
+            let ee_ski = synta_certificate::encode_subject_key_identifier(
+                &spki,
+                synta_certificate::KeyIdMethod::Rfc5280Sha1,
+                &synta_certificate::OpensslKeyIdHasher,
+            )
+            .unwrap();
+            let ee_aki = synta_certificate::encode_authority_key_identifier(
+                &ca_spki,
+                synta_certificate::KeyIdMethod::Rfc5280Sha1,
+                &synta_certificate::OpensslKeyIdHasher,
+            )
+            .unwrap();
+
+            let cert_der = CertificateBuilder::new()
+                .subject_name(&name)
+                .issuer_name(&ca_name)
+                .public_key_der(&spki)
+                .serial_number(Integer::from_i64(2))
+                .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
+                .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+                .add_extension_oid(synta_certificate::oids::SUBJECT_ALT_NAME, false, &san_der)
+                .add_extension_oid(synta_certificate::oids::EXTENDED_KEY_USAGE, false, &eku_der)
+                .add_extension_oid(synta_certificate::oids::KEY_USAGE, true, &ku_der)
+                .add_extension_oid(
+                    synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,
+                    false,
+                    &ee_ski,
+                )
+                .add_extension_oid(
+                    synta_certificate::oids::AUTHORITY_KEY_IDENTIFIER,
+                    false,
+                    &ee_aki,
+                )
+                .sign(&ca_signer)
+                .unwrap();
+
+            PkinitIdentity {
+                cert_der,
+                key_pkcs8_der: pkcs8,
+                chain: vec![ca_cert_der.clone()],
+            }
+        };
+
+        let client_san = synta_krb5::principal::encode_krb5_san("testuser", "EXAMPLE.COM").unwrap();
         let client_id = make_identity(
             "Test Client",
             client_san,
@@ -478,20 +457,14 @@ mod tests {
 
         let mut client_config = PkinitClientConfig::default();
         client_config.dh_group = DhGroup::EcP256;
-        let mut client =
-            PkinitClientState::new(client_id, trust_store.clone(), client_config);
-        client.set_kdc_identity(
-            "krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(),
-            None,
-        );
+        let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
+        client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
         let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
 
         let req_body_der = b"mock-req-body";
         let ctime = 1719600000i64;
-        let pa_req = client
-            .build_as_req(12345, ctime, 0, req_body_der)
-            .unwrap();
+        let pa_req = client.build_as_req(12345, ctime, 0, req_body_der).unwrap();
 
         let verified = server
             .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)

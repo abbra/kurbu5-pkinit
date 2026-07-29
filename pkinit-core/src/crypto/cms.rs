@@ -3,10 +3,10 @@ use synta::{
     Decoder, Encoding, ExplicitTag, ObjectIdentifier, OctetStringRef, RawDer, SetOf, Tag, ToDer,
 };
 use synta_certificate::{
+    AlgorithmIdentifier, BackendPublicKey, Certificate, DataHasher as _, Name, PrivateKey,
     cms_2010_types::IssuerAndSerialNumber,
     cms_rfc5652_types::{Attribute, EncapsulatedContentInfo, SignedData, SignerInfo},
-    digest_alg_id, pkcs7_types, AlgorithmIdentifier, BackendPublicKey, Certificate,
-    DataHasher as _, Name, PrivateKey,
+    digest_alg_id, pkcs7_types,
 };
 
 /// Result of verifying a CMS SignedData.
@@ -53,9 +53,8 @@ pub fn create_signed_data(
         .map_err(|e| PkinitError::CmsSignFailed(format!("hash: {e}")))?;
 
     // Build signed attributes
-    let (to_sign, signed_attrs_content) =
-        build_signed_attrs(&e_content_type, &digest_bytes)
-            .map_err(|e| PkinitError::CmsSignFailed(format!("signed attrs: {e}")))?;
+    let (to_sign, signed_attrs_content) = build_signed_attrs(&e_content_type, &digest_bytes)
+        .map_err(|e| PkinitError::CmsSignFailed(format!("signed attrs: {e}")))?;
 
     // Sign
     let signer = signer_key.as_signer(hash_algorithm);
@@ -329,8 +328,7 @@ pub fn create_unsigned_data(content: &[u8], content_oid: &[u32]) -> Result<Vec<u
 // ── Private helpers ─────────────────────────────────────────────────────────
 
 fn issuer_and_serial_der(cert_der: &[u8]) -> Result<Vec<u8>, String> {
-    let cert = Certificate::from_der(cert_der)
-        .map_err(|e| format!("parse certificate: {e}"))?;
+    let cert = Certificate::from_der(cert_der).map_err(|e| format!("parse certificate: {e}"))?;
     let issuer_name = Name::from_der(cert.tbs_certificate.issuer.as_bytes())
         .map_err(|e| format!("parse issuer Name: {e}"))?;
     IssuerAndSerialNumber {
@@ -544,12 +542,8 @@ mod tests {
             .issuer_name(&name)
             .public_key_der(&spki_der)
             .serial_number(Integer::from_i64(1))
-            .not_valid_before(Time::UtcTime(
-                UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap(),
-            ))
-            .not_valid_after(Time::UtcTime(
-                UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap(),
-            ))
+            .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
+            .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
             .sign(&key.as_signer("sha256"))
             .expect("sign cert");
 
@@ -562,15 +556,9 @@ mod tests {
         let content = b"test PKINIT content";
         let content_oid: &[u32] = &[1, 3, 6, 1, 5, 2, 3, 1]; // id-pkinit-authData
 
-        let ci_der = create_signed_data(
-            content,
-            content_oid,
-            key.as_ref(),
-            &cert_der,
-            &[],
-            "sha256",
-        )
-        .expect("create signed data");
+        let ci_der =
+            create_signed_data(content, content_oid, key.as_ref(), &cert_der, &[], "sha256")
+                .expect("create signed data");
 
         let verified = verify_signed_data(&ci_der).expect("verify signed data");
         assert_eq!(verified.content, content);
@@ -607,15 +595,9 @@ mod tests {
         let content = b"original content";
         let content_oid: &[u32] = &[1, 3, 6, 1, 5, 2, 3, 1];
 
-        let ci_der = create_signed_data(
-            content,
-            content_oid,
-            key.as_ref(),
-            &cert_der,
-            &[],
-            "sha256",
-        )
-        .expect("create signed data");
+        let ci_der =
+            create_signed_data(content, content_oid, key.as_ref(), &cert_der, &[], "sha256")
+                .expect("create signed data");
 
         // Tamper with the ContentInfo (flip a byte in the content area)
         let mut tampered = ci_der.clone();
@@ -632,15 +614,9 @@ mod tests {
         let content = b"sha384 content";
         let content_oid: &[u32] = &[1, 3, 6, 1, 5, 2, 3, 1];
 
-        let ci_der = create_signed_data(
-            content,
-            content_oid,
-            key.as_ref(),
-            &cert_der,
-            &[],
-            "sha384",
-        )
-        .expect("create signed data");
+        let ci_der =
+            create_signed_data(content, content_oid, key.as_ref(), &cert_der, &[], "sha384")
+                .expect("create signed data");
 
         let verified = verify_signed_data(&ci_der).expect("verify sha384");
         assert_eq!(verified.content, content);
@@ -652,15 +628,9 @@ mod tests {
         let content = b"sha512 content";
         let content_oid: &[u32] = &[1, 3, 6, 1, 5, 2, 3, 1];
 
-        let ci_der = create_signed_data(
-            content,
-            content_oid,
-            key.as_ref(),
-            &cert_der,
-            &[],
-            "sha512",
-        )
-        .expect("create signed data");
+        let ci_der =
+            create_signed_data(content, content_oid, key.as_ref(), &cert_der, &[], "sha512")
+                .expect("create signed data");
 
         let verified = verify_signed_data(&ci_der).expect("verify sha512");
         assert_eq!(verified.content, content);
@@ -669,14 +639,7 @@ mod tests {
     #[test]
     fn create_rejects_unsupported_hash() {
         let (key, cert_der) = generate_test_keypair_and_cert();
-        let result = create_signed_data(
-            b"test",
-            &[1, 2, 3],
-            key.as_ref(),
-            &cert_der,
-            &[],
-            "md5",
-        );
+        let result = create_signed_data(b"test", &[1, 2, 3], key.as_ref(), &cert_der, &[], "md5");
         assert!(result.is_err());
     }
 

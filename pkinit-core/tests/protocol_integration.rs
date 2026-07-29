@@ -32,8 +32,8 @@ impl OctetString2Key for TestO2K {
 fn generate_test_pki() -> (PkinitIdentity, PkinitIdentity, TrustStore) {
     use synta::{Integer, UtcTime};
     use synta_certificate::{
-        CertificateBuilder, ExtendedKeyUsageBuilder, NameBuilder,
-        SubjectAlternativeNameBuilder, Time,
+        CertificateBuilder, ExtendedKeyUsageBuilder, NameBuilder, SubjectAlternativeNameBuilder,
+        Time,
     };
 
     let ca_pkey = {
@@ -79,7 +79,11 @@ fn generate_test_pki() -> (PkinitIdentity, PkinitIdentity, TrustStore) {
         .serial_number(Integer::from_i64(1))
         .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
         .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
-        .add_extension_oid(synta_certificate::oids::SUBJECT_KEY_IDENTIFIER, false, &ski_der)
+        .add_extension_oid(
+            synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,
+            false,
+            &ski_der,
+        )
         .add_extension_oid(
             synta_certificate::oids::AUTHORITY_KEY_IDENTIFIER,
             false,
@@ -110,7 +114,10 @@ fn generate_test_pki() -> (PkinitIdentity, PkinitIdentity, TrustStore) {
                 .other_name(&san_oid_data)
                 .build()
                 .unwrap();
-            let eku_der = ExtendedKeyUsageBuilder::new().add_oid(eku_oid).build().unwrap();
+            let eku_der = ExtendedKeyUsageBuilder::new()
+                .add_oid(eku_oid)
+                .build()
+                .unwrap();
             let ku_der = synta_certificate::encode_key_usage(
                 1 << synta_certificate::KEY_USAGE_DIGITAL_SIGNATURE,
             )
@@ -137,11 +144,7 @@ fn generate_test_pki() -> (PkinitIdentity, PkinitIdentity, TrustStore) {
                 .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
                 .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
                 .add_extension_oid(synta_certificate::oids::SUBJECT_ALT_NAME, false, &san_der)
-                .add_extension_oid(
-                    synta_certificate::oids::EXTENDED_KEY_USAGE,
-                    false,
-                    &eku_der,
-                )
+                .add_extension_oid(synta_certificate::oids::EXTENDED_KEY_USAGE, false, &eku_der)
                 .add_extension_oid(synta_certificate::oids::KEY_USAGE, true, &ku_der)
                 .add_extension_oid(
                     synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,

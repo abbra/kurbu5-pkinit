@@ -141,10 +141,9 @@ impl PkinitClientState {
         let signed_auth_pack = if self.identity.cert_der.is_empty() {
             cms::create_unsigned_data(&auth_pack_der, synta_krb5::pkinit::ID_PKINIT_AUTH_DATA)?
         } else {
-            let signer_key =
-                synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
-                    self.identity.key_pkcs8_der.clone(),
-                );
+            let signer_key = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+                self.identity.key_pkcs8_der.clone(),
+            );
             let extra_certs: Vec<&[u8]> =
                 self.identity.chain.iter().map(|c| c.as_slice()).collect();
 
@@ -268,9 +267,10 @@ impl PkinitClientState {
         let shared_secret = dh_key.derive_shared_secret(&kdc_spki_der)?;
 
         let server_dh_nonce = dh_rep_info.server_dhnonce.map(|n| n.as_bytes().to_vec());
-        let selected_kdf = dh_rep_info.kdf.as_ref().map(|k| {
-            k.kdf_id.components().to_vec()
-        });
+        let selected_kdf = dh_rep_info
+            .kdf
+            .as_ref()
+            .map(|k| k.kdf_id.components().to_vec());
 
         if let Some(kdf_oid) = selected_kdf {
             let party_u = encode_principal_for_kdf(client_name)?;
@@ -299,10 +299,7 @@ impl PkinitClientState {
         }
     }
 
-    pub fn handle_tryagain(
-        &mut self,
-        error_padata_der: &[u8],
-    ) -> Result<RetryAction, PkinitError> {
+    pub fn handle_tryagain(&mut self, error_padata_der: &[u8]) -> Result<RetryAction, PkinitError> {
         let padata_list: Vec<synta_krb5::kerberos_v5::PaData> =
             synta::Decoder::new(error_padata_der, synta::Encoding::Der)
                 .decode()
@@ -380,16 +377,13 @@ fn rebuild_dh_spki(group: DhGroup, pub_key_bits: &[u8]) -> Result<Vec<u8>, Pkini
     let params_der = dh::group_params_der(group)
         .ok_or_else(|| PkinitError::DhParamsRejected("unknown DH group".into()))?;
 
-    let params_element: synta::Element<'_> =
-        synta::Decoder::new(params_der, synta::Encoding::Der)
-            .decode()
-            .map_err(|e| PkinitError::Asn1(format!("decode DH params: {e}")))?;
+    let params_element: synta::Element<'_> = synta::Decoder::new(params_der, synta::Encoding::Der)
+        .decode()
+        .map_err(|e| PkinitError::Asn1(format!("decode DH params: {e}")))?;
 
     let alg_id = synta_krb5::kerberos_v5_pkinit_agility::AlgorithmIdentifier {
-        algorithm: synta::ObjectIdentifier::new(
-            synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER,
-        )
-        .map_err(|e| PkinitError::Asn1(format!("DH OID: {e}")))?,
+        algorithm: synta::ObjectIdentifier::new(synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER)
+            .map_err(|e| PkinitError::Asn1(format!("DH OID: {e}")))?,
         parameters: Some(params_element),
     };
 
@@ -464,9 +458,7 @@ mod tests {
             PkinitClientConfig::default(),
         );
         let empty: Vec<synta_krb5::kerberos_v5::PaData> = vec![];
-        let empty_der = empty
-            .to_der()
-            .expect("encode empty padata list");
+        let empty_der = empty.to_der().expect("encode empty padata list");
         let result = state.handle_tryagain(&empty_der).unwrap();
         assert!(matches!(result, RetryAction::NoRetry));
     }

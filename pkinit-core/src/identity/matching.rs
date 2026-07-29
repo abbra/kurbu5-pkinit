@@ -81,9 +81,9 @@ fn parse_leaf(input: &str) -> Result<MatchRule, PkinitError> {
             "match rule must start with <TAG>: {input}"
         )));
     }
-    let close = input.find('>').ok_or_else(|| {
-        PkinitError::Config(format!("match rule missing closing >: {input}"))
-    })?;
+    let close = input
+        .find('>')
+        .ok_or_else(|| PkinitError::Config(format!("match rule missing closing >: {input}")))?;
     let tag = &input[1..close];
     let value = &input[close + 1..];
 
@@ -93,15 +93,13 @@ fn parse_leaf(input: &str) -> Result<MatchRule, PkinitError> {
         "SAN" => Ok(MatchRule::San(value.to_string())),
         "EKU" => {
             let arcs: Result<Vec<u32>, _> = value.split('.').map(|s| s.parse::<u32>()).collect();
-            let arcs = arcs.map_err(|e| {
-                PkinitError::Config(format!("invalid EKU OID {value}: {e}"))
-            })?;
+            let arcs =
+                arcs.map_err(|e| PkinitError::Config(format!("invalid EKU OID {value}: {e}")))?;
             Ok(MatchRule::Eku(arcs))
         }
         "KU" => {
-            let bits = u16::from_str_radix(value, 16).map_err(|e| {
-                PkinitError::Config(format!("invalid KU hex {value}: {e}"))
-            })?;
+            let bits = u16::from_str_radix(value, 16)
+                .map_err(|e| PkinitError::Config(format!("invalid KU hex {value}: {e}")))?;
             Ok(MatchRule::Ku(bits))
         }
         _ => Err(PkinitError::Config(format!(
@@ -206,8 +204,8 @@ mod tests {
     use super::*;
     use synta::{Integer, UtcTime};
     use synta_certificate::{
-        CertificateBuilder, ExtendedKeyUsageBuilder, NameBuilder,
-        PrivateKeyBuilder, SubjectAlternativeNameBuilder, Time,
+        CertificateBuilder, ExtendedKeyUsageBuilder, NameBuilder, PrivateKeyBuilder,
+        SubjectAlternativeNameBuilder, Time,
     };
 
     fn build_test_cert(cn: &str, o: &str, dns_sans: &[&str], eku_oids: &[&[u32]]) -> Vec<u8> {

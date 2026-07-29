@@ -44,9 +44,7 @@ impl IdentitySource {
         match scheme {
             "FILE" => {
                 let (cert, key) = rest.split_once(',').ok_or_else(|| {
-                    PkinitError::Config(format!(
-                        "FILE identity requires cert,key paths: {rest}"
-                    ))
+                    PkinitError::Config(format!("FILE identity requires cert,key paths: {rest}"))
                 })?;
                 Ok(IdentitySource::File {
                     cert_path: PathBuf::from(cert),
@@ -64,9 +62,7 @@ impl IdentitySource {
             }),
             "ENV" => {
                 let (cert_var, key_var) = rest.split_once(',').ok_or_else(|| {
-                    PkinitError::Config(format!(
-                        "ENV identity requires cert_var,key_var: {rest}"
-                    ))
+                    PkinitError::Config(format!("ENV identity requires cert_var,key_var: {rest}"))
                 })?;
                 Ok(IdentitySource::Env {
                     cert_var: cert_var.to_string(),

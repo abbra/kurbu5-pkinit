@@ -1,8 +1,8 @@
 use crate::error::PkinitError;
 use synta::{Element, Encoding, ObjectIdentifier, ToDer};
 use synta_certificate::{
-    find_extension_value, key_usage_bit, Certificate, ExtendedKeyUsage, GeneralName, GeneralNames,
-    KeyUsage,
+    Certificate, ExtendedKeyUsage, GeneralName, GeneralNames, KeyUsage, find_extension_value,
+    key_usage_bit,
 };
 
 fn parse_cert(cert_der: &[u8]) -> Result<Certificate<'_>, PkinitError> {
@@ -11,7 +11,10 @@ fn parse_cert(cert_der: &[u8]) -> Result<Certificate<'_>, PkinitError> {
 }
 
 fn extensions_raw<'a>(cert: &'a Certificate<'a>) -> Option<&'a [u8]> {
-    cert.tbs_certificate.extensions.as_ref().map(|r| r.as_bytes())
+    cert.tbs_certificate
+        .extensions
+        .as_ref()
+        .map(|r| r.as_bytes())
 }
 
 fn decode_san<'a>(ext_raw: &'a [u8]) -> Result<GeneralNames<'a>, PkinitError> {
@@ -108,11 +111,11 @@ pub fn extract_eku_oids(cert_der: &[u8]) -> Result<Vec<Vec<u32>>, PkinitError> {
         None => return Ok(Vec::new()),
     };
 
-    let eku_bytes =
-        match find_extension_value(ext_raw, synta_certificate::oids::EXTENDED_KEY_USAGE) {
-            Some(b) => b,
-            None => return Ok(Vec::new()),
-        };
+    let eku_bytes = match find_extension_value(ext_raw, synta_certificate::oids::EXTENDED_KEY_USAGE)
+    {
+        Some(b) => b,
+        None => return Ok(Vec::new()),
+    };
 
     let eku = ExtendedKeyUsage::from_der(eku_bytes)
         .map_err(|e| PkinitError::Asn1(format!("decode ExtendedKeyUsage: {e}")))?;
@@ -227,8 +230,7 @@ mod tests {
     #[test]
     fn extract_pkinit_san_round_trip() {
         let (key, spki, name) = generate_key_and_name();
-        let on_der =
-            synta_krb5::principal::encode_krb5_san("user", "EXAMPLE.COM").unwrap();
+        let on_der = synta_krb5::principal::encode_krb5_san("user", "EXAMPLE.COM").unwrap();
 
         let san_der = SubjectAlternativeNameBuilder::new()
             .other_name(&on_der)
@@ -249,8 +251,8 @@ mod tests {
     #[test]
     fn extract_pkinit_san_service_principal() {
         let (key, spki, name) = generate_key_and_name();
-        let on_der = synta_krb5::principal::encode_krb5_san("krbtgt/EXAMPLE.COM", "EXAMPLE.COM")
-            .unwrap();
+        let on_der =
+            synta_krb5::principal::encode_krb5_san("krbtgt/EXAMPLE.COM", "EXAMPLE.COM").unwrap();
 
         let san_der = SubjectAlternativeNameBuilder::new()
             .other_name(&on_der)
@@ -323,11 +325,7 @@ mod tests {
             key.as_ref(),
             &spki,
             &name,
-            vec![(
-                synta_certificate::oids::EXTENDED_KEY_USAGE,
-                false,
-                eku_der,
-            )],
+            vec![(synta_certificate::oids::EXTENDED_KEY_USAGE, false, eku_der)],
         );
 
         let ekus = extract_eku_oids(&cert_der).unwrap();
@@ -376,8 +374,7 @@ mod tests {
     #[test]
     fn mixed_san_types() {
         let (key, spki, name) = generate_key_and_name();
-        let pkinit_on =
-            synta_krb5::principal::encode_krb5_san("user", "EXAMPLE.COM").unwrap();
+        let pkinit_on = synta_krb5::principal::encode_krb5_san("user", "EXAMPLE.COM").unwrap();
         let upn_on = encode_upn_other_name("user@example.com").unwrap();
 
         let san_der = SubjectAlternativeNameBuilder::new()

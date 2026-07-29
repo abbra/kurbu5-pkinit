@@ -38,9 +38,8 @@ impl TrustStore {
 
         match scheme {
             "FILE" => {
-                let data = std::fs::read(path).map_err(|e| {
-                    PkinitError::IdentityLoadFailed(format!("reading {path}: {e}"))
-                })?;
+                let data = std::fs::read(path)
+                    .map_err(|e| PkinitError::IdentityLoadFailed(format!("reading {path}: {e}")))?;
                 let blocks =
                     synta_certificate::read_pki_blocks(&data, b"", Some(&OpensslDecryptor))
                         .map_err(|e| {
@@ -59,9 +58,8 @@ impl TrustStore {
                     PkinitError::IdentityLoadFailed(format!("reading dir {path}: {e}"))
                 })?;
                 for entry in entries {
-                    let entry = entry.map_err(|e| {
-                        PkinitError::IdentityLoadFailed(format!("dir entry: {e}"))
-                    })?;
+                    let entry = entry
+                        .map_err(|e| PkinitError::IdentityLoadFailed(format!("dir entry: {e}")))?;
                     let file_path = entry.path();
                     if !file_path.is_file() {
                         continue;
@@ -101,9 +99,10 @@ impl TrustStore {
         chain: &[Vec<u8>],
         require_crl: bool,
     ) -> Result<(), PkinitError> {
-        let store = OwnedStore::try_new(self.anchors.iter().map(|a| a.as_slice())).map_err(
-            |e| PkinitError::ChainValidationFailed(format!("building trust store: {e}")),
-        )?;
+        let store =
+            OwnedStore::try_new(self.anchors.iter().map(|a| a.as_slice())).map_err(|e| {
+                PkinitError::ChainValidationFailed(format!("building trust store: {e}"))
+            })?;
 
         let leaf_cert: synta_certificate::Certificate<'_> =
             synta::Decoder::new(cert_der, synta::Encoding::Der)
@@ -147,10 +146,8 @@ impl TrustStore {
             synta_x509_verification::WEBPKI_PERMITTED_SPKI_ALGORITHMS_WITH_PQ;
         policy.permitted_signature_algorithms =
             synta_x509_verification::WEBPKI_PERMITTED_SIGNATURE_ALGORITHMS_WITH_PQ;
-        policy.ca_extension_policy =
-            synta_x509_verification::ExtensionPolicy::new_permit_all();
-        policy.ee_extension_policy =
-            synta_x509_verification::ExtensionPolicy::new_permit_all();
+        policy.ca_extension_policy = synta_x509_verification::ExtensionPolicy::new_permit_all();
+        policy.ee_extension_policy = synta_x509_verification::ExtensionPolicy::new_permit_all();
 
         let revocation = if require_crl && !self.crls.is_empty() {
             let mut crl_store = CrlStore::new();
@@ -224,8 +221,7 @@ mod tests {
         ca: bool,
     ) -> Vec<u8> {
         let pkcs8 = key.to_pkcs8_der().expect("PKCS#8 DER");
-        let backend =
-            synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(pkcs8);
+        let backend = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(pkcs8);
         let signer = synta_certificate::crypto::PrivateKey::as_signer(&backend, "sha256");
 
         let ski_der = synta_certificate::encode_subject_key_identifier(
@@ -297,13 +293,9 @@ mod tests {
     fn validate_self_signed_chain() {
         let ca_key = generate_ec_key();
         let ca_spki = ca_key.public_key_to_der().unwrap();
-        let ca_name = NameBuilder::new()
-            .common_name("Test CA")
-            .build()
-            .unwrap();
+        let ca_name = NameBuilder::new().common_name("Test CA").build().unwrap();
 
-        let ca_cert_der =
-            sign_cert(&ca_key, &ca_name, &ca_name, &ca_spki, &ca_spki, 1, true);
+        let ca_cert_der = sign_cert(&ca_key, &ca_name, &ca_name, &ca_spki, &ca_spki, 1, true);
 
         let mut store = TrustStore::new();
         store.add_anchor(ca_cert_der.clone());
@@ -317,21 +309,13 @@ mod tests {
     fn validate_two_cert_chain() {
         let ca_key = generate_ec_key();
         let ca_spki = ca_key.public_key_to_der().unwrap();
-        let ca_name = NameBuilder::new()
-            .common_name("Test CA")
-            .build()
-            .unwrap();
-        let ca_cert_der =
-            sign_cert(&ca_key, &ca_name, &ca_name, &ca_spki, &ca_spki, 1, true);
+        let ca_name = NameBuilder::new().common_name("Test CA").build().unwrap();
+        let ca_cert_der = sign_cert(&ca_key, &ca_name, &ca_name, &ca_spki, &ca_spki, 1, true);
 
         let ee_key = generate_ec_key();
         let ee_spki = ee_key.public_key_to_der().unwrap();
-        let ee_name = NameBuilder::new()
-            .common_name("Test EE")
-            .build()
-            .unwrap();
-        let ee_cert_der =
-            sign_cert(&ca_key, &ee_name, &ca_name, &ee_spki, &ca_spki, 2, false);
+        let ee_name = NameBuilder::new().common_name("Test EE").build().unwrap();
+        let ee_cert_der = sign_cert(&ca_key, &ee_name, &ca_name, &ee_spki, &ca_spki, 2, false);
 
         let mut store = TrustStore::new();
         store.add_anchor(ca_cert_der);
@@ -345,19 +329,12 @@ mod tests {
     fn validate_untrusted_cert_fails() {
         let ca_key = generate_ec_key();
         let ca_spki = ca_key.public_key_to_der().unwrap();
-        let ca_name = NameBuilder::new()
-            .common_name("Real CA")
-            .build()
-            .unwrap();
-        let ca_cert_der =
-            sign_cert(&ca_key, &ca_name, &ca_name, &ca_spki, &ca_spki, 1, true);
+        let ca_name = NameBuilder::new().common_name("Real CA").build().unwrap();
+        let ca_cert_der = sign_cert(&ca_key, &ca_name, &ca_name, &ca_spki, &ca_spki, 1, true);
 
         let rogue_key = generate_ec_key();
         let rogue_spki = rogue_key.public_key_to_der().unwrap();
-        let rogue_name = NameBuilder::new()
-            .common_name("Rogue CA")
-            .build()
-            .unwrap();
+        let rogue_name = NameBuilder::new().common_name("Rogue CA").build().unwrap();
         let _rogue_cert_der = sign_cert(
             &rogue_key,
             &rogue_name,
@@ -370,10 +347,7 @@ mod tests {
 
         let ee_key = generate_ec_key();
         let ee_spki = ee_key.public_key_to_der().unwrap();
-        let ee_name = NameBuilder::new()
-            .common_name("EE")
-            .build()
-            .unwrap();
+        let ee_name = NameBuilder::new().common_name("EE").build().unwrap();
         let ee_cert_der = sign_cert(
             &rogue_key,
             &ee_name,
@@ -397,12 +371,8 @@ mod tests {
     fn load_from_file_path() {
         let ca_key = generate_ec_key();
         let ca_spki = ca_key.public_key_to_der().unwrap();
-        let ca_name = NameBuilder::new()
-            .common_name("File CA")
-            .build()
-            .unwrap();
-        let ca_cert_der =
-            sign_cert(&ca_key, &ca_name, &ca_name, &ca_spki, &ca_spki, 1, true);
+        let ca_name = NameBuilder::new().common_name("File CA").build().unwrap();
+        let ca_cert_der = sign_cert(&ca_key, &ca_name, &ca_name, &ca_spki, &ca_spki, 1, true);
 
         let pem = synta_certificate::der_to_pem("CERTIFICATE", &ca_cert_der);
 
