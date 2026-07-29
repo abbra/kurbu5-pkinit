@@ -1,0 +1,18 @@
+[package]
+name = "pkinit-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "PKINIT protocol logic for Kerberos pre-authentication"
+
+[dependencies]
+synta = "0.3"
+synta-krb5 = "0.3"
+synta-certificate = { version = "0.3", features = ["std", "openssl"] }
+synta-x509-verification = "0.3"
+native-ossl = "0.2"
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

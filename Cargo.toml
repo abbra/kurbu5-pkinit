@@ -1,0 +1,3 @@
+[workspace]
+members = ["pkinit-core", "kurbu5-pkinit"]
+resolver = "3"
