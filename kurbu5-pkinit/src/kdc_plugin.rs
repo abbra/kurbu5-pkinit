@@ -151,11 +151,32 @@ impl PkinitKdc {
             .unwrap_or(18);
 
         let o2k = Krb5OctetString2Key::new(ctx);
-        let as_req_der = b"";
+
+        let client_name = callbacks
+            .client_name_string(false)
+            .ok_or(Krb5Error::Custom(libc::EINVAL))?;
+        let server_name = unsafe {
+            if req.request.is_null() {
+                return Err(Krb5Error::Custom(libc::EINVAL));
+            }
+            let request = &*req.request;
+            if request.server.is_null() {
+                return Err(Krb5Error::Custom(libc::EINVAL));
+            }
+            ctx.unparse_principal(&*request.server)?
+        };
 
         let (pa_rep_der, derived) = self
             .state
-            .build_as_rep(&modreq.verified, nonce, enctype, as_req_der, &o2k)
+            .build_as_rep(
+                &modreq.verified,
+                nonce,
+                enctype,
+                req.request_packet,
+                &client_name,
+                &server_name,
+                &o2k,
+            )
             .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
 
         let keyblock = kurbu5_sys::krb5_keyblock {

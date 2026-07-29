@@ -6,7 +6,7 @@ use crate::constants::{self, DhGroup};
 use crate::crypto::checksum;
 use crate::crypto::cms;
 use crate::crypto::dh::{self, DhKeyPair};
-use crate::crypto::kdf::{self, DerivedKey, OctetString2Key};
+use crate::crypto::kdf::{self, DerivedKey, OctetString2Key, encode_principal_for_kdf};
 use crate::error::PkinitError;
 use crate::identity::{PkinitIdentity, TrustStore};
 
@@ -82,7 +82,7 @@ impl PkinitClientState {
             cusec: synta::Integer::from(cusec),
             ctime: gen_time,
             nonce: synta::Integer::from(nonce),
-            pa_checksum: Some(OctetStringRef::new(&checksums.sha256)),
+            pa_checksum: Some(OctetStringRef::new(&checksums.sha1)),
             freshness_token: freshness_ref.map(OctetStringRef::new),
         };
 
@@ -166,6 +166,8 @@ impl PkinitClientState {
         enctype: i32,
         as_req_der: &[u8],
         pa_rep_raw: &[u8],
+        client_name: &str,
+        server_name: &str,
         o2k: &dyn OctetString2Key,
     ) -> Result<DerivedKey, PkinitError> {
         let pa_rep: synta_krb5::pkinit::PaPkAsRep<'_> =
@@ -173,9 +175,16 @@ impl PkinitClientState {
                 .map_err(|e| PkinitError::Asn1(format!("decode PA-PK-AS-REP: {e}")))?;
 
         match pa_rep {
-            synta_krb5::pkinit::PaPkAsRep::DhInfo(dh_rep_info) => {
-                self.process_dh_rep(dh_rep_info, nonce, enctype, as_req_der, pa_rep_raw, o2k)
-            }
+            synta_krb5::pkinit::PaPkAsRep::DhInfo(dh_rep_info) => self.process_dh_rep(
+                dh_rep_info,
+                nonce,
+                enctype,
+                as_req_der,
+                pa_rep_raw,
+                client_name,
+                server_name,
+                o2k,
+            ),
             synta_krb5::pkinit::PaPkAsRep::EncKeyPack(_) => Err(PkinitError::Unsupported(
                 "RSA key transport mode not supported".into(),
             )),
@@ -189,6 +198,8 @@ impl PkinitClientState {
         enctype: i32,
         as_req_der: &[u8],
         pa_rep_raw: &[u8],
+        client_name: &str,
+        server_name: &str,
         o2k: &dyn OctetString2Key,
     ) -> Result<DerivedKey, PkinitError> {
         let verified = cms::verify_signed_data(dh_rep_info.dh_signed_data.as_bytes())?;
@@ -252,17 +263,15 @@ impl PkinitClientState {
         });
 
         if let Some(kdf_oid) = selected_kdf {
-            let mut combined_nonce = self.dh_nonce.clone().unwrap_or_default();
-            if let Some(ref sn) = server_dh_nonce {
-                combined_nonce.extend_from_slice(sn);
-            }
+            let party_u = encode_principal_for_kdf(client_name)?;
+            let party_v = encode_principal_for_kdf(server_name)?;
 
             kdf::pkinit_kdf(
                 &shared_secret,
                 &kdf_oid,
                 enctype,
-                &combined_nonce,
-                &[],
+                &party_u,
+                &party_v,
                 as_req_der,
                 pa_rep_raw,
                 o2k,

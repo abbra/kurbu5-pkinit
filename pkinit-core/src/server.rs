@@ -6,7 +6,7 @@ use crate::constants::DhGroup;
 use crate::crypto::checksum;
 use crate::crypto::cms;
 use crate::crypto::dh::{self, DhKeyPair};
-use crate::crypto::kdf::{self, DerivedKey, OctetString2Key};
+use crate::crypto::kdf::{self, DerivedKey, OctetString2Key, encode_principal_for_kdf};
 use crate::error::PkinitError;
 use crate::identity::{PkinitIdentity, TrustStore};
 
@@ -160,6 +160,8 @@ impl PkinitKdcState {
         nonce: i32,
         enctype: i32,
         as_req_der: &[u8],
+        client_name: &str,
+        server_name: &str,
         o2k: &dyn OctetString2Key,
     ) -> Result<(Vec<u8>, DerivedKey), PkinitError> {
         let kdc_dh_key = DhKeyPair::generate(verified.dh_group)?;
@@ -218,15 +220,15 @@ impl PkinitKdcState {
             .map_err(|e| PkinitError::Asn1(format!("encode PA-PK-AS-REP: {e}")))?;
 
         let derived_key = if let Some(kdf_oid) = selected_kdf {
-            let mut combined_nonce = verified.client_dh_nonce.clone().unwrap_or_default();
-            combined_nonce.extend_from_slice(&server_dh_nonce);
+            let party_u = encode_principal_for_kdf(client_name)?;
+            let party_v = encode_principal_for_kdf(server_name)?;
 
             kdf::pkinit_kdf(
                 &shared_secret,
                 kdf_oid,
                 enctype,
-                &combined_nonce,
-                &[],
+                &party_u,
+                &party_v,
                 as_req_der,
                 &pa_rep_der,
                 o2k,
@@ -480,12 +482,31 @@ mod tests {
         assert!(!verified.is_anonymous);
 
         let as_req_der = b"mock-full-as-req";
+        let client_name = "testuser@EXAMPLE.COM";
+        let server_name = "krbtgt/EXAMPLE.COM@EXAMPLE.COM";
         let (pa_rep, server_key) = server
-            .build_as_rep(&verified, 12345, 18, as_req_der, &o2k)
+            .build_as_rep(
+                &verified,
+                12345,
+                18,
+                as_req_der,
+                client_name,
+                server_name,
+                &o2k,
+            )
             .unwrap();
 
         let client_key = client
-            .process_as_rep(&pa_rep, 12345, 18, as_req_der, &pa_rep, &o2k)
+            .process_as_rep(
+                &pa_rep,
+                12345,
+                18,
+                as_req_der,
+                &pa_rep,
+                client_name,
+                server_name,
+                &o2k,
+            )
             .unwrap();
 
         assert_eq!(client_key.enctype, server_key.enctype);

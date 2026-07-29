@@ -206,12 +206,31 @@ fn pkinit_dh_full_exchange_aes256() {
     assert!(!verified.is_anonymous);
 
     let as_req_full = b"test-full-as-req";
+    let client_name = "testuser@EXAMPLE.COM";
+    let server_name = "krbtgt/EXAMPLE.COM@EXAMPLE.COM";
     let (pa_rep, server_key) = server
-        .build_as_rep(&verified, nonce, enctype, as_req_full, &o2k)
+        .build_as_rep(
+            &verified,
+            nonce,
+            enctype,
+            as_req_full,
+            client_name,
+            server_name,
+            &o2k,
+        )
         .unwrap();
 
     let client_key = client
-        .process_as_rep(&pa_rep, nonce, enctype, as_req_full, &pa_rep, &o2k)
+        .process_as_rep(
+            &pa_rep,
+            nonce,
+            enctype,
+            as_req_full,
+            &pa_rep,
+            client_name,
+            server_name,
+            &o2k,
+        )
         .unwrap();
 
     assert_eq!(client_key.enctype, server_key.enctype);
@@ -244,12 +263,31 @@ fn pkinit_dh_full_exchange_aes128() {
         .unwrap();
 
     let as_req_full = b"test-full-as-req-128";
+    let client_name = "testuser@EXAMPLE.COM";
+    let server_name = "krbtgt/EXAMPLE.COM@EXAMPLE.COM";
     let (pa_rep, server_key) = server
-        .build_as_rep(&verified, nonce, enctype, as_req_full, &o2k)
+        .build_as_rep(
+            &verified,
+            nonce,
+            enctype,
+            as_req_full,
+            client_name,
+            server_name,
+            &o2k,
+        )
         .unwrap();
 
     let client_key = client
-        .process_as_rep(&pa_rep, nonce, enctype, as_req_full, &pa_rep, &o2k)
+        .process_as_rep(
+            &pa_rep,
+            nonce,
+            enctype,
+            as_req_full,
+            &pa_rep,
+            client_name,
+            server_name,
+            &o2k,
+        )
         .unwrap();
 
     assert_eq!(client_key.enctype, server_key.enctype);
@@ -289,12 +327,31 @@ fn pkinit_anonymous_exchange() {
     assert!(verified.is_anonymous);
 
     let as_req_full = b"anon-full-as-req";
+    let client_name = "WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS";
+    let server_name = "krbtgt/EXAMPLE.COM@EXAMPLE.COM";
     let (pa_rep, server_key) = server
-        .build_as_rep(&verified, nonce, enctype, as_req_full, &o2k)
+        .build_as_rep(
+            &verified,
+            nonce,
+            enctype,
+            as_req_full,
+            client_name,
+            server_name,
+            &o2k,
+        )
         .unwrap();
 
     let client_key = client
-        .process_as_rep(&pa_rep, nonce, enctype, as_req_full, &pa_rep, &o2k)
+        .process_as_rep(
+            &pa_rep,
+            nonce,
+            enctype,
+            as_req_full,
+            &pa_rep,
+            client_name,
+            server_name,
+            &o2k,
+        )
         .unwrap();
 
     assert_eq!(client_key.key_data, server_key.key_data);

@@ -126,6 +126,52 @@ fn sskdf(
     Ok(out)
 }
 
+/// Encode a `"name@REALM"` principal as KRB5PrincipalName DER for use as
+/// partyUInfo/partyVInfo in the RFC 8636 KDF OtherInfo.
+///
+/// Per MIT krb5's `pkinit_kdf`, anonymous principals are always normalized
+/// to `WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS` with name-type NT_WELLKNOWN,
+/// regardless of the request realm.
+pub fn encode_principal_for_kdf(name: &str) -> Result<Vec<u8>, PkinitError> {
+    if is_anonymous_principal(name) {
+        return synta_krb5::principal::encode_krb5_principal_name_from_parts(
+            synta_krb5::constants::NT_WELLKNOWN,
+            &["WELLKNOWN", "ANONYMOUS"],
+            "WELLKNOWN:ANONYMOUS",
+        )
+        .map_err(|e| PkinitError::Asn1(format!("encode anonymous principal for KDF: {e}")));
+    }
+
+    let (pname, realm_opt) = synta_krb5::principal::parse_principal(name)
+        .ok_or_else(|| PkinitError::Asn1(format!("invalid principal name: {name}")))?;
+    let realm_str = realm_opt
+        .as_ref()
+        .map(|r| synta_krb5::principal::realm_to_string(r))
+        .unwrap_or_default();
+    synta_krb5::principal::encode_krb5_principal_name_from_parts(
+        pname.name_type.get(),
+        &pname
+            .name_string
+            .iter()
+            .map(|s| s.as_latin1_string())
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>(),
+        &realm_str,
+    )
+    .map_err(|e| PkinitError::Asn1(format!("encode principal for KDF: {e}")))
+}
+
+fn is_anonymous_principal(name: &str) -> bool {
+    let Some((pname, _)) = synta_krb5::principal::parse_principal(name) else {
+        return false;
+    };
+    pname.name_string.len() == 2
+        && pname.name_string[0].as_bytes() == b"WELLKNOWN"
+        && pname.name_string[1].as_bytes() == b"ANONYMOUS"
+}
+
 /// Legacy key derivation (RFC 4556, no agility).
 /// Used when no KDF OID is negotiated.
 pub fn octetstring2key(

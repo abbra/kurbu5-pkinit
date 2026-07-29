@@ -132,9 +132,22 @@ impl ClpreauthModule for PkinitClient {
                     return Err(Krb5Error::Custom(libc::EINVAL));
                 }
 
-                // kurbu5-rs doesn't expose the AS-REQ to the KDC's return_padata,
-                // so both sides must use empty as_req_der for KDF consistency.
-                let as_req_der: &[u8] = b"";
+                let as_req_der = req.encoded_previous_request.unwrap_or(b"");
+
+                let client_name = unsafe {
+                    let request = &*req.request;
+                    if request.client.is_null() {
+                        return Err(Krb5Error::Custom(libc::EINVAL));
+                    }
+                    ctx.unparse_principal(&*request.client)?
+                };
+                let server_name = unsafe {
+                    let request = &*req.request;
+                    if request.server.is_null() {
+                        return Err(Krb5Error::Custom(libc::EINVAL));
+                    }
+                    ctx.unparse_principal(&*request.server)?
+                };
 
                 let o2k = Krb5OctetString2Key::new(ctx);
                 let derived = state
@@ -144,6 +157,8 @@ impl ClpreauthModule for PkinitClient {
                         enctype,
                         as_req_der,
                         &pa_contents,
+                        &client_name,
+                        &server_name,
                         &o2k,
                     )
                     .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
