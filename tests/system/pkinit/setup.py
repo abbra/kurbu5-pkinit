@@ -3,12 +3,16 @@
 
 Adapted from ahdapa's contrib/demo/ccache/setup.py.  Extends the base
 Realm pattern with PKINIT PKI generation (CA + KDC cert + client cert),
-krb5/kdc config with PKINIT stanzas, and plugin directory setup that
-points at the kurbu5-pkinit cdylib.
+krb5/kdc config with PKINIT stanzas, and per-interface plugin selection
+for cross-testing between kurbu5-pkinit and MIT's built-in pkinit.
 
 Usage:
-    python3 setup.py --plugin-so /path/to/libkurbu5_pkinit.so \
-                     --env-file /tmp/env.sh
+    # Both sides use the same plugin:
+    python3 setup.py --plugin-so /path/to/libkurbu5_pkinit.so
+
+    # Mix KDC and client plugins:
+    python3 setup.py --kdc-plugin-so /path/to/libkurbu5_pkinit.so \
+                     --client-plugin-so /usr/lib64/krb5/plugins/preauth/pkinit.so
 """
 
 import atexit
@@ -26,14 +30,15 @@ PORTBASE = 63100
 
 class PkinitRealm:
     def __init__(self, testdir=None, realm=REALM, portbase=PORTBASE,
-                 plugin_so_path=None, principal="user"):
+                 kdc_plugin_so=None, client_plugin_so=None, principal="user"):
         self.realm = realm
         self.portbase = portbase
         self.principal = principal
         self.testdir = os.path.abspath(
             testdir or tempfile.mkdtemp(prefix="pkinit-test-")
         )
-        self.plugin_so_path = os.path.abspath(plugin_so_path) if plugin_so_path else None
+        self.kdc_plugin_so = os.path.abspath(kdc_plugin_so) if kdc_plugin_so else None
+        self.client_plugin_so = os.path.abspath(client_plugin_so) if client_plugin_so else None
         self._kdc_proc = None
 
         self.krb5_conf = os.path.join(self.testdir, "krb5.conf")
@@ -178,21 +183,18 @@ class PkinitRealm:
                 f"openssl {args[0]} failed:\n{result.stderr}"
             )
 
-    # -- Plugin directory --
+    # -- Plugin validation --
 
-    def _setup_plugins(self):
-        if not self.plugin_so_path:
-            raise RuntimeError("--plugin-so is required")
-        if not os.path.isfile(self.plugin_so_path):
-            raise RuntimeError(f"Plugin .so not found: {self.plugin_so_path}")
-
-        preauth_dir = os.path.join(self.plugins_dir, "preauth")
-        certauth_dir = os.path.join(self.plugins_dir, "certauth")
-        os.makedirs(preauth_dir, exist_ok=True)
-        os.makedirs(certauth_dir, exist_ok=True)
-        os.symlink(self.plugin_so_path, os.path.join(preauth_dir, "pkinit.so"))
-        os.symlink(self.plugin_so_path, os.path.join(certauth_dir, "pkinit.so"))
-        print(f"[setup] Plugin symlinks created in {self.plugins_dir}", file=sys.stderr)
+    def _validate_plugins(self):
+        if not self.kdc_plugin_so:
+            raise RuntimeError("KDC plugin .so is required")
+        if not os.path.isfile(self.kdc_plugin_so):
+            raise RuntimeError(f"KDC plugin .so not found: {self.kdc_plugin_so}")
+        if not self.client_plugin_so:
+            raise RuntimeError("Client plugin .so is required")
+        if not os.path.isfile(self.client_plugin_so):
+            raise RuntimeError(f"Client plugin .so not found: {self.client_plugin_so}")
+        os.makedirs(self.plugins_dir, exist_ok=True)
 
     # -- System KDB module detection --
 
@@ -234,6 +236,17 @@ class PkinitRealm:
             [domain_realm]
                 localhost = {self.realm}
                 .localhost = {self.realm}
+
+            [plugins]
+                kdcpreauth = {{
+                    module = pkinit:{self.kdc_plugin_so}
+                }}
+                clpreauth = {{
+                    module = pkinit:{self.client_plugin_so}
+                }}
+                certauth = {{
+                    module = pkinit:{self.kdc_plugin_so}
+                }}
         """)
 
         kdc = textwrap.dedent(f"""\
@@ -296,7 +309,7 @@ class PkinitRealm:
 
     def create_db(self, master_password="pkinit-test-pw"):
         self._generate_pki()
-        self._setup_plugins()
+        self._validate_plugins()
         self._write_configs()
         self._run(
             "kdb5_util", "create", "-r", self.realm,
@@ -367,19 +380,29 @@ def main():
     parser.add_argument("--testdir", default=None)
     parser.add_argument("--realm", default=REALM)
     parser.add_argument("--portbase", type=int, default=PORTBASE)
-    parser.add_argument("--plugin-so", required=True,
-                        help="Path to libkurbu5_pkinit.so")
+    parser.add_argument("--plugin-so",
+                        help="Path to plugin .so (sets both KDC and client)")
+    parser.add_argument("--kdc-plugin-so",
+                        help="Path to KDC-side preauth plugin .so")
+    parser.add_argument("--client-plugin-so",
+                        help="Path to client-side preauth plugin .so")
     parser.add_argument("--env-file", metavar="FILE",
                         help="Write shell-sourceable env vars to FILE")
     parser.add_argument("--principal", default="user",
                         help="Client principal name (default: user)")
     args = parser.parse_args()
 
+    kdc_so = args.kdc_plugin_so or args.plugin_so
+    client_so = args.client_plugin_so or args.plugin_so
+    if not kdc_so or not client_so:
+        parser.error("Provide --plugin-so, or both --kdc-plugin-so and --client-plugin-so")
+
     realm = PkinitRealm(
         testdir=args.testdir,
         realm=args.realm,
         portbase=args.portbase,
-        plugin_so_path=args.plugin_so,
+        kdc_plugin_so=kdc_so,
+        client_plugin_so=client_so,
         principal=args.principal,
     )
     realm.start()
