@@ -1,5 +1,5 @@
-use pkinit_core::error::PkinitError;
 use pkinit_core::crypto::kdf::OctetString2Key;
+use pkinit_core::error::PkinitError;
 
 unsafe extern "C" {
     fn krb5_c_random_to_key(
@@ -23,9 +23,7 @@ pub struct Krb5OctetString2Key {
 
 impl Krb5OctetString2Key {
     pub fn new(ctx: &kurbu5_rs::PluginContext<'_>) -> Self {
-        Self {
-            ctx: ctx.as_raw(),
-        }
+        Self { ctx: ctx.as_raw() }
     }
 }
 
@@ -60,9 +58,7 @@ impl OctetString2Key for Krb5OctetString2Key {
     fn random_length(&self, enctype: i32) -> Result<usize, PkinitError> {
         let mut keybytes: usize = 0;
         let mut _keylength: usize = 0;
-        let ret = unsafe {
-            krb5_c_keylengths(self.ctx, enctype, &mut keybytes, &mut _keylength)
-        };
+        let ret = unsafe { krb5_c_keylengths(self.ctx, enctype, &mut keybytes, &mut _keylength) };
         if ret != 0 {
             return Err(PkinitError::KdfFailed(format!(
                 "krb5_c_keylengths failed: {ret}"
@@ -74,9 +70,7 @@ impl OctetString2Key for Krb5OctetString2Key {
     fn key_length(&self, enctype: i32) -> Result<usize, PkinitError> {
         let mut _keybytes: usize = 0;
         let mut keylength: usize = 0;
-        let ret = unsafe {
-            krb5_c_keylengths(self.ctx, enctype, &mut _keybytes, &mut keylength)
-        };
+        let ret = unsafe { krb5_c_keylengths(self.ctx, enctype, &mut _keybytes, &mut keylength) };
         if ret != 0 {
             return Err(PkinitError::KdfFailed(format!(
                 "krb5_c_keylengths failed: {ret}"

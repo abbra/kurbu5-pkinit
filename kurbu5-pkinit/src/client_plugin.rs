@@ -116,10 +116,7 @@ impl ClpreauthModule for PkinitClient {
                 Ok(vec![])
             }
             16 => {
-                let state = self
-                    .state
-                    .as_mut()
-                    .ok_or(Krb5Error::Custom(libc::EINVAL))?;
+                let state = self.state.as_mut().ok_or(Krb5Error::Custom(libc::EINVAL))?;
 
                 let nonce = unsafe { (*req.request).nonce };
                 let (ctime, cusec) = callbacks.get_preauth_time(true)?;
@@ -135,10 +132,7 @@ impl ClpreauthModule for PkinitClient {
                 Ok(vec![PaData::new(16, pa_req_der)])
             }
             17 => {
-                let state = self
-                    .state
-                    .as_mut()
-                    .ok_or(Krb5Error::Custom(libc::EINVAL))?;
+                let state = self.state.as_mut().ok_or(Krb5Error::Custom(libc::EINVAL))?;
 
                 let nonce = unsafe { (*req.request).nonce };
                 let enctype = callbacks.get_etype();

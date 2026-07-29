@@ -24,12 +24,15 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>) -> PkinitClien
     if let Ok(v) = profile.get_integer("libdefaults", "pkinit_dh_min_bits", None, 2048) {
         config.dh_min_bits = v as u32;
     }
-    if let Ok(v) = profile.get_boolean("libdefaults", "pkinit_require_hostname_match", None, true)
-    {
+    if let Ok(v) = profile.get_boolean("libdefaults", "pkinit_require_hostname_match", None, true) {
         config.require_hostname_match = v;
     }
     if let Ok(v) = profile.get_string("libdefaults", "pkinit_eku_checking", None, None) {
-        apply_eku_checking(&v, &mut config.require_eku, &mut config.accept_secondary_eku);
+        apply_eku_checking(
+            &v,
+            &mut config.require_eku,
+            &mut config.accept_secondary_eku,
+        );
     }
     if let Ok(v) = profile.get_boolean("libdefaults", "pkinit_require_freshness_token", None, false)
     {
@@ -58,7 +61,11 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>) -> PkinitClien
             config.dh_min_bits = v as u32;
         }
         if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_eku_checking"), None) {
-            apply_eku_checking(&v, &mut config.require_eku, &mut config.accept_secondary_eku);
+            apply_eku_checking(
+                &v,
+                &mut config.require_eku,
+                &mut config.accept_secondary_eku,
+            );
         }
     }
 
@@ -81,19 +88,20 @@ pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
     if let Ok(revoke) = profile.get_values(&["kdcdefaults", "pkinit_revoke"]) {
         config.crls = revoke;
     }
-    if let Ok(v) =
-        profile.get_boolean("kdcdefaults", "pkinit_require_crl_checking", None, false)
-    {
+    if let Ok(v) = profile.get_boolean("kdcdefaults", "pkinit_require_crl_checking", None, false) {
         config.require_crl_checking = v;
     }
     if let Ok(v) = profile.get_integer("kdcdefaults", "pkinit_dh_min_bits", None, 2048) {
         config.dh_min_bits = v as u32;
     }
     if let Ok(v) = profile.get_string("kdcdefaults", "pkinit_eku_checking", None, None) {
-        apply_eku_checking(&v, &mut config.require_eku, &mut config.accept_secondary_eku);
+        apply_eku_checking(
+            &v,
+            &mut config.require_eku,
+            &mut config.accept_secondary_eku,
+        );
     }
-    if let Ok(v) =
-        profile.get_boolean("kdcdefaults", "pkinit_require_freshness_token", None, false)
+    if let Ok(v) = profile.get_boolean("kdcdefaults", "pkinit_require_freshness_token", None, false)
     {
         config.require_freshness = v;
     }
@@ -113,8 +121,7 @@ pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
     if let Ok(revoke) = profile.get_values(&["realms", realm, "pkinit_revoke"]) {
         config.crls = revoke;
     }
-    if let Ok(v) =
-        profile.get_boolean("realms", realm, Some("pkinit_require_crl_checking"), false)
+    if let Ok(v) = profile.get_boolean("realms", realm, Some("pkinit_require_crl_checking"), false)
     {
         config.require_crl_checking = v;
     }
@@ -122,7 +129,11 @@ pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
         config.dh_min_bits = v as u32;
     }
     if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_eku_checking"), None) {
-        apply_eku_checking(&v, &mut config.require_eku, &mut config.accept_secondary_eku);
+        apply_eku_checking(
+            &v,
+            &mut config.require_eku,
+            &mut config.accept_secondary_eku,
+        );
     }
     if let Ok(indicators) = profile.get_values(&["realms", realm, "pkinit_indicator"]) {
         config.auth_indicators = indicators;

@@ -2,9 +2,9 @@ use synta::OctetString;
 
 use kurbu5_rs::kdcpreauth::*;
 use kurbu5_rs::{
-    CertRef, CertauthDecision, CertauthModule, Krb5Error, KdcpreauthCallbacks,
-    KdcpreauthModule, PluginContext, ReturnPadataRequest, VerifyResponse,
-    PA_HARDWARE, PA_REPLACES_KEY, PA_SUFFICIENT, PA_TYPED_E_DATA,
+    CertRef, CertauthDecision, CertauthModule, KdcpreauthCallbacks, KdcpreauthModule, Krb5Error,
+    PA_HARDWARE, PA_REPLACES_KEY, PA_SUFFICIENT, PA_TYPED_E_DATA, PluginContext,
+    ReturnPadataRequest, VerifyResponse,
 };
 use pkinit_core::certauth;
 use pkinit_core::config::PkinitKdcConfig;
@@ -36,10 +36,7 @@ impl KdcpreauthModule for PkinitKdc {
         let profile = kurbu5_rs::Profile::from_context(ctx)?;
         let config = profile::read_kdc_config(&profile, realm);
 
-        let identity_str = config
-            .identity
-            .as_deref()
-            .ok_or(Krb5Error::NoHandle)?;
+        let identity_str = config.identity.as_deref().ok_or(Krb5Error::NoHandle)?;
 
         let source =
             IdentitySource::parse(identity_str).map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
@@ -145,10 +142,7 @@ impl PkinitKdc {
             .ok_or(Krb5Error::Custom(libc::EINVAL))?;
 
         let nonce = modreq.verified.nonce;
-        let enctype = callbacks
-            .fast_armor()
-            .map(|k| k.enctype)
-            .unwrap_or(18);
+        let enctype = callbacks.fast_armor().map(|k| k.enctype).unwrap_or(18);
 
         let o2k = Krb5OctetString2Key::new(ctx);
 
@@ -303,18 +297,12 @@ impl CertauthModule for PkinitCertauth {
             .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
 
         match result {
-            pkinit_core::certauth::CertauthResult::Authorized => {
-                Ok(CertauthDecision::Authorized)
-            }
+            pkinit_core::certauth::CertauthResult::Authorized => Ok(CertauthDecision::Authorized),
             pkinit_core::certauth::CertauthResult::AuthorizedHwauth => {
                 Ok(CertauthDecision::AuthorizedHwauth)
             }
-            pkinit_core::certauth::CertauthResult::NoOpinion => {
-                Ok(CertauthDecision::NoOpinion)
-            }
-            pkinit_core::certauth::CertauthResult::Rejected(_) => {
-                Ok(CertauthDecision::NoOpinion)
-            }
+            pkinit_core::certauth::CertauthResult::NoOpinion => Ok(CertauthDecision::NoOpinion),
+            pkinit_core::certauth::CertauthResult::Rejected(_) => Ok(CertauthDecision::NoOpinion),
         }
     }
 }
