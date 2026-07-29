@@ -124,20 +124,25 @@ impl PkinitClientState {
             .to_der()
             .map_err(|e| PkinitError::Asn1(format!("encode AuthPack: {e}")))?;
 
-        let signer_key =
-            synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
-                self.identity.key_pkcs8_der.clone(),
-            );
-        let extra_certs: Vec<&[u8]> = self.identity.chain.iter().map(|c| c.as_slice()).collect();
+        let signed_auth_pack = if self.identity.cert_der.is_empty() {
+            auth_pack_der
+        } else {
+            let signer_key =
+                synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+                    self.identity.key_pkcs8_der.clone(),
+                );
+            let extra_certs: Vec<&[u8]> =
+                self.identity.chain.iter().map(|c| c.as_slice()).collect();
 
-        let signed_auth_pack = cms::create_signed_data(
-            &auth_pack_der,
-            synta_krb5::pkinit::ID_PKINIT_AUTH_DATA,
-            &signer_key,
-            &self.identity.cert_der,
-            &extra_certs,
-            "sha256",
-        )?;
+            cms::create_signed_data(
+                &auth_pack_der,
+                synta_krb5::pkinit::ID_PKINIT_AUTH_DATA,
+                &signer_key,
+                &self.identity.cert_der,
+                &extra_certs,
+                "sha256",
+            )?
+        };
 
         let pa_pk_as_req = synta_krb5::pkinit::PaPkAsReq {
             signed_auth_pack: OctetStringRef::new(&signed_auth_pack),
