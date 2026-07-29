@@ -172,6 +172,8 @@ dependencies = [
  "kurbu5-sys",
  "libc",
  "pkinit-core",
+ "synta",
+ "synta-krb5",
 ]
 
 [[package]]
