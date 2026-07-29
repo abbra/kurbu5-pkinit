@@ -25,8 +25,18 @@ pub fn verify_checksums(
 ) -> Result<(), PkinitError> {
     let computed = generate_checksums(req_body_der)?;
 
-    if computed.sha1 != pa_checksum {
-        return Err(PkinitError::ChecksumFailed);
+    match pa_checksum.len() {
+        32 => {
+            if computed.sha256 != pa_checksum {
+                return Err(PkinitError::ChecksumFailed);
+            }
+        }
+        20 => {
+            if computed.sha1 != pa_checksum {
+                return Err(PkinitError::ChecksumFailed);
+            }
+        }
+        _ => return Err(PkinitError::ChecksumFailed),
     }
 
     if let Some(sha256) = pa_checksum2 {

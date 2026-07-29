@@ -81,11 +81,6 @@ pub fn validate_dh_params(spki_der: &[u8], min_bits: u32) -> Result<DhGroup, Pki
     let key = Pkey::<Public>::from_der(spki_der)
         .map_err(|e| PkinitError::DhParamsRejected(format!("decode SPKI: {e}")))?;
     let bits = key.bits();
-    if bits < min_bits {
-        return Err(PkinitError::DhParamsRejected(format!(
-            "key size {bits} bits < minimum {min_bits} bits"
-        )));
-    }
     let exported = key
         .export()
         .map_err(|e| PkinitError::DhParamsRejected(format!("export params: {e}")))?;
@@ -95,12 +90,26 @@ pub fn validate_dh_params(spki_der: &[u8], min_bits: u32) -> Result<DhGroup, Pki
             "prime256v1" | "P-256" => Ok(DhGroup::EcP256),
             "secp384r1" | "P-384" => Ok(DhGroup::EcP384),
             "secp521r1" | "P-521" => Ok(DhGroup::EcP521),
-            "modp_2048" => Ok(DhGroup::Oakley2048),
-            "modp_4096" => Ok(DhGroup::Oakley4096),
-            other => Err(PkinitError::DhParamsRejected(format!(
-                "unsupported group: {other}"
-            ))),
+            other => {
+                if bits < min_bits {
+                    return Err(PkinitError::DhParamsRejected(format!(
+                        "key size {bits} bits < minimum {min_bits} bits"
+                    )));
+                }
+                match other {
+                    "modp_2048" => Ok(DhGroup::Oakley2048),
+                    "modp_4096" => Ok(DhGroup::Oakley4096),
+                    _ => Err(PkinitError::DhParamsRejected(format!(
+                        "unsupported group: {other}"
+                    ))),
+                }
+            }
         };
+    }
+    if bits < min_bits {
+        return Err(PkinitError::DhParamsRejected(format!(
+            "key size {bits} bits < minimum {min_bits} bits"
+        )));
     }
     if let Ok(p_bytes) = exported.get_bn(native_ossl::typed_params::dh::P.name()) {
         return identify_oakley_group(&p_bytes, bits);
