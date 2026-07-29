@@ -15,11 +15,6 @@ unsafe extern "C" {
         keybytes: *mut usize,
         keylength: *mut usize,
     ) -> kurbu5_sys::krb5_error_code;
-
-    fn krb5_free_keyblock_contents(
-        context: kurbu5_sys::krb5_context,
-        keyblock: *mut kurbu5_sys::krb5_keyblock,
-    );
 }
 
 pub struct Krb5OctetString2Key {
@@ -36,16 +31,20 @@ impl Krb5OctetString2Key {
 
 impl OctetString2Key for Krb5OctetString2Key {
     fn random_to_key(&self, enctype: i32, random_data: &[u8]) -> Result<Vec<u8>, PkinitError> {
+        let keylength = self.key_length(enctype)?;
+
         let seed = kurbu5_sys::krb5_data {
             magic: 0,
             length: random_data.len() as u32,
             data: random_data.as_ptr() as *mut _,
         };
+
+        let mut key_buf = vec![0u8; keylength];
         let mut keyblock = kurbu5_sys::krb5_keyblock {
             magic: 0,
             enctype,
-            length: 0,
-            contents: std::ptr::null_mut(),
+            length: keylength as u32,
+            contents: key_buf.as_mut_ptr(),
         };
 
         let ret = unsafe { krb5_c_random_to_key(self.ctx, enctype, &seed, &mut keyblock) };
@@ -55,18 +54,7 @@ impl OctetString2Key for Krb5OctetString2Key {
             )));
         }
 
-        let key_data = if !keyblock.contents.is_null() && keyblock.length > 0 {
-            unsafe {
-                std::slice::from_raw_parts(keyblock.contents, keyblock.length as usize).to_vec()
-            }
-        } else {
-            return Err(PkinitError::KdfFailed(
-                "krb5_c_random_to_key returned empty key".into(),
-            ));
-        };
-
-        unsafe { krb5_free_keyblock_contents(self.ctx, &mut keyblock) };
-        Ok(key_data)
+        Ok(key_buf)
     }
 
     fn random_length(&self, enctype: i32) -> Result<usize, PkinitError> {
