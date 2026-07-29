@@ -2,6 +2,7 @@ pub mod config;
 pub mod constants;
 pub mod crypto;
 pub mod error;
+pub mod san;
 
 pub use config::{PkinitClientConfig, PkinitKdcConfig};
 pub use constants::DhGroup;
