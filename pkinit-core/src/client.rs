@@ -78,12 +78,22 @@ impl PkinitClientState {
 
         let freshness_ref = self.freshness_token.as_deref();
 
+        let sha256_alg_id = synta_krb5::pkinit::AlgorithmIdentifier {
+            algorithm: synta::ObjectIdentifier::new(synta_certificate::oids::ID_SHA256)
+                .map_err(|e| PkinitError::Asn1(format!("SHA-256 OID: {e}")))?,
+            parameters: None,
+        };
+        let pa_checksum2 = synta_krb5::pkinit::PAChecksum2 {
+            checksum: OctetStringRef::new(&checksums.sha256),
+            algorithm_identifier: sha256_alg_id,
+        };
         let pk_auth = synta_krb5::pkinit::PKAuthenticator {
             cusec: synta::Integer::from(cusec),
             ctime: gen_time,
             nonce: synta::Integer::from(nonce),
             pa_checksum: Some(OctetStringRef::new(&checksums.sha1)),
             freshness_token: freshness_ref.map(OctetStringRef::new),
+            pa_checksum2: Some(pa_checksum2),
         };
 
         if self.dh_key.is_none() {

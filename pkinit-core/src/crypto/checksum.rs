@@ -18,10 +18,31 @@ pub fn generate_checksums(req_body_der: &[u8]) -> Result<Checksums, PkinitError>
     Ok(Checksums { sha1, sha256 })
 }
 
+fn hash_for_algorithm(algorithm: &str, data: &[u8]) -> Result<Vec<u8>, PkinitError> {
+    let hasher = default_data_hasher();
+    hasher
+        .hash_data(algorithm, data)
+        .map_err(|e| PkinitError::Ossl(format!("{algorithm} hash failed: {e}")))
+}
+
+fn oid_to_algorithm(oid: &[u32]) -> Option<&'static str> {
+    if oid == synta_certificate::oids::ID_SHA1 {
+        Some("sha1")
+    } else if oid == synta_certificate::oids::ID_SHA256 {
+        Some("sha256")
+    } else if oid == synta_certificate::oids::ID_SHA384 {
+        Some("sha384")
+    } else if oid == synta_certificate::oids::ID_SHA512 {
+        Some("sha512")
+    } else {
+        None
+    }
+}
+
 pub fn verify_checksums(
     req_body_der: &[u8],
     pa_checksum: &[u8],
-    pa_checksum2: Option<&[u8]>,
+    pa_checksum2: Option<(&[u8], &[u32])>,
 ) -> Result<(), PkinitError> {
     let computed = generate_checksums(req_body_der)?;
 
@@ -39,12 +60,23 @@ pub fn verify_checksums(
         _ => return Err(PkinitError::ChecksumFailed),
     }
 
-    if let Some(sha256) = pa_checksum2 {
-        if computed.sha256 != sha256 {
-            return Err(PkinitError::ChecksumFailed);
-        }
+    if let Some((checksum_bytes, algorithm_oid)) = pa_checksum2 {
+        verify_checksum2(req_body_der, checksum_bytes, algorithm_oid)?;
     }
 
+    Ok(())
+}
+
+pub fn verify_checksum2(
+    req_body_der: &[u8],
+    checksum_bytes: &[u8],
+    algorithm_oid: &[u32],
+) -> Result<(), PkinitError> {
+    let alg = oid_to_algorithm(algorithm_oid).ok_or(PkinitError::ChecksumFailed)?;
+    let expected = hash_for_algorithm(alg, req_body_der)?;
+    if expected != checksum_bytes {
+        return Err(PkinitError::ChecksumFailed);
+    }
     Ok(())
 }
 
@@ -64,7 +96,12 @@ mod tests {
     fn verify_checksums_accepts_valid() {
         let input = b"test request body";
         let checksums = generate_checksums(input).unwrap();
-        verify_checksums(input, &checksums.sha1, Some(&checksums.sha256)).unwrap();
+        verify_checksums(
+            input,
+            &checksums.sha1,
+            Some((&checksums.sha256, synta_certificate::oids::ID_SHA256)),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -72,7 +109,14 @@ mod tests {
         let input = b"test request body";
         let bad = vec![0u8; 20];
         let checksums = generate_checksums(input).unwrap();
-        assert!(verify_checksums(input, &bad, Some(&checksums.sha256)).is_err());
+        assert!(
+            verify_checksums(
+                input,
+                &bad,
+                Some((&checksums.sha256, synta_certificate::oids::ID_SHA256)),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -80,7 +124,14 @@ mod tests {
         let input = b"test request body";
         let checksums = generate_checksums(input).unwrap();
         let bad = vec![0u8; 32];
-        assert!(verify_checksums(input, &checksums.sha1, Some(&bad)).is_err());
+        assert!(
+            verify_checksums(
+                input,
+                &checksums.sha1,
+                Some((&bad, synta_certificate::oids::ID_SHA256)),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -88,5 +139,48 @@ mod tests {
         let input = b"test request body";
         let checksums = generate_checksums(input).unwrap();
         verify_checksums(input, &checksums.sha1, None).unwrap();
+    }
+
+    #[test]
+    fn verify_checksums_sha384() {
+        let input = b"test request body";
+        let checksums = generate_checksums(input).unwrap();
+        let sha384 = hash_for_algorithm("sha384", input).unwrap();
+        assert_eq!(sha384.len(), 48);
+        verify_checksums(
+            input,
+            &checksums.sha1,
+            Some((&sha384, synta_certificate::oids::ID_SHA384)),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn verify_checksums_sha512() {
+        let input = b"test request body";
+        let checksums = generate_checksums(input).unwrap();
+        let sha512 = hash_for_algorithm("sha512", input).unwrap();
+        assert_eq!(sha512.len(), 64);
+        verify_checksums(
+            input,
+            &checksums.sha1,
+            Some((&sha512, synta_certificate::oids::ID_SHA512)),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn verify_checksums_rejects_unknown_oid() {
+        let input = b"test request body";
+        let checksums = generate_checksums(input).unwrap();
+        let unknown_oid: &[u32] = &[1, 2, 3, 4, 5];
+        assert!(
+            verify_checksums(
+                input,
+                &checksums.sha1,
+                Some((&checksums.sha256, unknown_oid)),
+            )
+            .is_err()
+        );
     }
 }

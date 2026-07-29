@@ -113,13 +113,18 @@ impl PkinitKdcState {
             });
         }
 
-        if let Some(pa_checksum) = pk_auth.pa_checksum.as_ref() {
-            if let Some(body) = req_body_der {
-                checksum::verify_checksums(
-                    body,
-                    pa_checksum.as_bytes(),
-                    None,
-                )?;
+        let pa_checksum2_info = pk_auth.pa_checksum2.as_ref().map(|pc2| {
+            (
+                pc2.checksum.as_bytes(),
+                pc2.algorithm_identifier.algorithm.components(),
+            )
+        });
+
+        if let Some(body) = req_body_der {
+            if let Some(pa_checksum) = pk_auth.pa_checksum.as_ref() {
+                checksum::verify_checksums(body, pa_checksum.as_bytes(), pa_checksum2_info)?;
+            } else if let Some((checksum2_bytes, oid)) = pa_checksum2_info {
+                checksum::verify_checksum2(body, checksum2_bytes, oid)?;
             }
         }
 
