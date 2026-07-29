@@ -169,6 +169,7 @@ name = "kurbu5-pkinit"
 version = "0.1.0"
 dependencies = [
  "kurbu5-rs",
+ "kurbu5-sys",
  "libc",
  "pkinit-core",
 ]
