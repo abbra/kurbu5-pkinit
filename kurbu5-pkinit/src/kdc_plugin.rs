@@ -1,3 +1,5 @@
+use synta::OctetString;
+
 use kurbu5_rs::kdcpreauth::*;
 use kurbu5_rs::{
     CertRef, CertauthDecision, CertauthModule, Krb5Error, KdcpreauthCallbacks,
@@ -55,8 +57,12 @@ impl KdcpreauthModule for PkinitKdc {
         Ok(PkinitKdc { state, config })
     }
 
-    fn flags_for_type(_ctx: &PluginContext<'_>, _pa_type: i32) -> i32 {
-        PA_SUFFICIENT | PA_REPLACES_KEY | PA_TYPED_E_DATA | PA_HARDWARE
+    fn flags_for_type(_ctx: &PluginContext<'_>, pa_type: i32) -> i32 {
+        if pa_type == 147 {
+            0
+        } else {
+            PA_SUFFICIENT | PA_REPLACES_KEY | PA_TYPED_E_DATA | PA_HARDWARE
+        }
     }
 
     fn get_edata(
@@ -117,6 +123,22 @@ impl KdcpreauthModule for PkinitKdc {
         req: ReturnPadataRequest<'_>,
         callbacks: &KdcpreauthCallbacks<'_>,
     ) -> Result<Option<PaData>, Krb5Error> {
+        let pa_type = req.padata.map(|p| p.pa_type).unwrap_or(0);
+        match pa_type {
+            16 => self.return_pkinit_dh(ctx, &req, callbacks),
+            147 => Self::return_pkinit_kx(ctx, &req, callbacks),
+            _ => Ok(None),
+        }
+    }
+}
+
+impl PkinitKdc {
+    fn return_pkinit_dh(
+        &self,
+        ctx: &PluginContext<'_>,
+        req: &ReturnPadataRequest<'_>,
+        callbacks: &KdcpreauthCallbacks<'_>,
+    ) -> Result<Option<PaData>, Krb5Error> {
         let modreq = req
             .modreq
             .and_then(|m| m.downcast_ref::<PkinitModReq>())
@@ -145,6 +167,92 @@ impl KdcpreauthModule for PkinitKdc {
         callbacks.replace_reply_key(&keyblock, false)?;
 
         Ok(Some(PaData::new(17, pa_rep_der)))
+    }
+
+    fn return_pkinit_kx(
+        ctx: &PluginContext<'_>,
+        req: &ReturnPadataRequest<'_>,
+        callbacks: &KdcpreauthCallbacks<'_>,
+    ) -> Result<Option<PaData>, Krb5Error> {
+        let is_anonymous = callbacks
+            .client_name_principal()
+            .is_some_and(crate::principal::is_anonymous);
+        if !is_anonymous {
+            return Ok(None);
+        }
+
+        if req.reply.is_null() || req.encrypting_key.is_null() {
+            return Err(Krb5Error::Custom(libc::EINVAL));
+        }
+
+        unsafe {
+            let reply = &*req.reply;
+            if reply.ticket.is_null() {
+                return Err(Krb5Error::Custom(libc::EINVAL));
+            }
+            let ticket = &*reply.ticket;
+            if ticket.enc_part2.is_null() {
+                return Err(Krb5Error::Custom(libc::EINVAL));
+            }
+            let enc_tkt = &mut *ticket.enc_part2;
+            if enc_tkt.session.is_null() {
+                return Err(Krb5Error::Custom(libc::EINVAL));
+            }
+            let session = &*enc_tkt.session;
+
+            let new_session = kurbu5_rs::crypto::fx_cf2_simple(
+                ctx,
+                session as *const _,
+                c"PKINIT",
+                req.encrypting_key as *const _,
+                c"KEYEXCHANGE",
+            )?;
+
+            let key_data = std::slice::from_raw_parts(session.contents, session.length as usize);
+            let enc_key = synta_krb5::kerberos_v5::EncryptionKey {
+                keytype: synta_krb5::kerberos_v5::Int32::new_unchecked(session.enctype),
+                keyvalue: OctetString::new(key_data.to_vec()),
+            };
+            let key_der = enc_key
+                .to_der()
+                .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
+
+            let enc = kurbu5_rs::crypto::encrypt(
+                ctx,
+                req.encrypting_key as *const _,
+                44, // KRB5_KEYUSAGE_PA_PKINIT_KX
+                &key_der,
+            )?;
+
+            let enc_data = synta_krb5::kerberos_v5::EncryptedData {
+                etype: synta_krb5::kerberos_v5::Int32::new_unchecked(enc.enctype),
+                kvno: None,
+                cipher: OctetString::new(enc.ciphertext),
+            };
+            let enc_data_der = enc_data
+                .to_der()
+                .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
+
+            let ns = &*new_session;
+            let session_mut = &mut *enc_tkt.session;
+            if !session_mut.contents.is_null() && session_mut.length > 0 {
+                std::ptr::write_bytes(session_mut.contents, 0, session_mut.length as usize);
+            }
+            kurbu5_sys::krb5_free_keyblock_contents(ctx.as_raw(), enc_tkt.session);
+            session_mut.enctype = ns.enctype;
+            session_mut.length = ns.length;
+            let new_contents = libc::malloc(ns.length as usize) as *mut u8;
+            if new_contents.is_null() {
+                kurbu5_sys::krb5_free_keyblock(ctx.as_raw(), new_session);
+                return Err(Krb5Error::Custom(libc::ENOMEM));
+            }
+            std::ptr::copy_nonoverlapping(ns.contents, new_contents, ns.length as usize);
+            session_mut.contents = new_contents;
+
+            kurbu5_sys::krb5_free_keyblock(ctx.as_raw(), new_session);
+
+            Ok(Some(PaData::new(147, enc_data_der)))
+        }
     }
 }
 

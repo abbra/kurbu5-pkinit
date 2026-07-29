@@ -1,6 +1,7 @@
 mod client_plugin;
 mod kdc_plugin;
 mod o2k;
+mod principal;
 mod profile;
 
 use client_plugin::PkinitClient;
