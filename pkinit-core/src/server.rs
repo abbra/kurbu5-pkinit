@@ -81,7 +81,19 @@ impl PkinitKdcState {
                 (v.content, v.signer_cert_der, false)
             }
             Err(_) => {
-                let auth_pack_der = pa_req.signed_auth_pack.as_bytes().to_vec();
+                let raw = pa_req.signed_auth_pack.as_bytes();
+                let auth_pack_der = match cms::extract_unsigned_content(raw) {
+                    Ok((content, ct)) => {
+                        if ct.as_slice() != synta_krb5::pkinit::ID_PKINIT_AUTH_DATA {
+                            return Err(PkinitError::CmsContentTypeMismatch {
+                                expected: "id-pkinit-authData".into(),
+                                actual: format!("{ct:?}"),
+                            });
+                        }
+                        content
+                    }
+                    Err(_) => raw.to_vec(),
+                };
                 (auth_pack_der, vec![], true)
             }
         };

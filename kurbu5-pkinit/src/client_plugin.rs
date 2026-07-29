@@ -47,16 +47,31 @@ impl ClpreauthModule for PkinitClient {
             return Ok(());
         }
 
+        let is_anonymous = unsafe {
+            let client_princ = (*req.request).client;
+            if client_princ.is_null() {
+                false
+            } else {
+                crate::principal::is_anonymous(kurbu5_rs::PrincipalRef::from(&*client_princ))
+            }
+        };
+
         let realm = ctx.realm().ok();
         let profile = kurbu5_rs::Profile::from_context(ctx)?;
         self.config = profile::read_client_config(&profile, realm.as_deref());
 
-        let identity_str = self.config.identity.as_deref().ok_or(Krb5Error::NoHandle)?;
-
-        let source =
-            IdentitySource::parse(identity_str).map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
-        let identity =
-            PkinitIdentity::load(&source).map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
+        let identity = if is_anonymous {
+            PkinitIdentity {
+                cert_der: vec![],
+                key_pkcs8_der: vec![],
+                chain: vec![],
+            }
+        } else {
+            let identity_str = self.config.identity.as_deref().ok_or(Krb5Error::NoHandle)?;
+            let source =
+                IdentitySource::parse(identity_str).map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
+            PkinitIdentity::load(&source).map_err(|_| Krb5Error::Custom(libc::EINVAL))?
+        };
 
         let mut trust_store = TrustStore::new();
         for anchor in &self.config.anchors {

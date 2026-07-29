@@ -129,7 +129,7 @@ impl PkinitClientState {
             .map_err(|e| PkinitError::Asn1(format!("encode AuthPack: {e}")))?;
 
         let signed_auth_pack = if self.identity.cert_der.is_empty() {
-            auth_pack_der
+            cms::create_unsigned_data(&auth_pack_der, synta_krb5::pkinit::ID_PKINIT_AUTH_DATA)?
         } else {
             let signer_key =
                 synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
