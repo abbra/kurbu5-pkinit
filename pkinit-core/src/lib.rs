@@ -1,3 +1,4 @@
+pub mod certauth;
 pub mod config;
 pub mod constants;
 pub mod crypto;
