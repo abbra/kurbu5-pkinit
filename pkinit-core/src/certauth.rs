@@ -127,11 +127,15 @@ pub fn verify_kdc_eku(cert_der: &[u8]) -> Result<(), PkinitError> {
 }
 
 /// Evaluate a certificate against a dbmatch rule.
-///
-/// This is a placeholder that returns `NoOpinion` until the certificate
-/// matching engine is implemented in Task 8.
-pub fn db_match(_cert_der: &[u8], _match_rule: &str) -> Result<CertauthResult, PkinitError> {
-    Ok(CertauthResult::NoOpinion)
+pub fn db_match(cert_der: &[u8], match_rule: &str) -> Result<CertauthResult, PkinitError> {
+    let matcher = crate::identity::matching::CertMatcher::parse(match_rule)?;
+    if matcher.matches(cert_der)? {
+        Ok(CertauthResult::Authorized)
+    } else {
+        Ok(CertauthResult::Rejected(
+            "certificate does not match rule".into(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -475,9 +479,16 @@ mod tests {
     // -- db_match --
 
     #[test]
-    fn db_match_returns_no_opinion() {
+    fn db_match_accepts_matching_san() {
         let cert = build_client_cert("user", "EXAMPLE.COM");
         let result = db_match(&cert, "<SAN>user@EXAMPLE.COM").unwrap();
-        assert_eq!(result, CertauthResult::NoOpinion);
+        assert_eq!(result, CertauthResult::Authorized);
+    }
+
+    #[test]
+    fn db_match_rejects_non_matching_san() {
+        let cert = build_client_cert("user", "EXAMPLE.COM");
+        let result = db_match(&cert, "<SAN>admin@EXAMPLE.COM").unwrap();
+        assert!(matches!(result, CertauthResult::Rejected(_)));
     }
 }

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::error::PkinitError;
 
 pub mod loader;
+pub mod matching;
 pub mod store;
 
 pub use store::TrustStore;
