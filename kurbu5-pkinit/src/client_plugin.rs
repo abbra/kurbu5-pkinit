@@ -43,6 +43,10 @@ impl ClpreauthModule for PkinitClient {
         _callbacks: &mut ClpreauthCallbacks<'_>,
         req: &EtypeInfoRequest<'_>,
     ) -> Result<(), Krb5Error> {
+        if self.state.as_ref().is_some_and(|s| s.has_dh_key()) {
+            return Ok(());
+        }
+
         let realm = ctx.realm().ok();
         let profile = kurbu5_rs::Profile::from_context(ctx)?;
         self.config = profile::read_client_config(&profile, realm.as_deref());
@@ -128,7 +132,9 @@ impl ClpreauthModule for PkinitClient {
                     return Err(Krb5Error::Custom(libc::EINVAL));
                 }
 
-                let as_req_der = req.encoded_previous_request.unwrap_or(b"");
+                // kurbu5-rs doesn't expose the AS-REQ to the KDC's return_padata,
+                // so both sides must use empty as_req_der for KDF consistency.
+                let as_req_der: &[u8] = b"";
 
                 let o2k = Krb5OctetString2Key::new(ctx);
                 let derived = state

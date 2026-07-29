@@ -47,6 +47,10 @@ impl PkinitClientState {
         }
     }
 
+    pub fn has_dh_key(&self) -> bool {
+        self.dh_key.is_some()
+    }
+
     pub fn set_freshness_token(&mut self, token: Vec<u8>) {
         self.freshness_token = Some(token);
     }

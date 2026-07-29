@@ -201,7 +201,7 @@ fn pkinit_dh_full_exchange_aes256() {
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
 
     let verified = server
-        .verify_as_req(&pa_req, req_body_der, 300, ctime, None)
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
         .unwrap();
     assert!(!verified.is_anonymous);
 
@@ -240,7 +240,7 @@ fn pkinit_dh_full_exchange_aes128() {
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
 
     let verified = server
-        .verify_as_req(&pa_req, req_body_der, 300, ctime, None)
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
         .unwrap();
 
     let as_req_full = b"test-full-as-req-128";
@@ -284,7 +284,7 @@ fn pkinit_anonymous_exchange() {
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
 
     let verified = server
-        .verify_as_req(&pa_req, req_body_der, 300, ctime, None)
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
         .unwrap();
     assert!(verified.is_anonymous);
 

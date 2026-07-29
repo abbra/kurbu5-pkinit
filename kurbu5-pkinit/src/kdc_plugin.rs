@@ -89,22 +89,17 @@ impl KdcpreauthModule for PkinitKdc {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        let req_body_der = pa_contents;
-
-        let verified = match self.state.verify_as_req(
-            pa_contents,
-            req_body_der,
-            max_skew,
-            current_time,
-            None,
-        ) {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = &e;
-                respond(VerifyResponse::err(libc::EINVAL));
-                return;
-            }
-        };
+        let verified =
+            match self
+                .state
+                .verify_as_req(pa_contents, None, max_skew, current_time, None)
+            {
+                Ok(v) => v,
+                Err(_) => {
+                    respond(VerifyResponse::err(libc::EINVAL));
+                    return;
+                }
+            };
 
         if !verified.is_anonymous {
             for indicator in &self.config.auth_indicators {

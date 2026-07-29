@@ -42,7 +42,7 @@ impl PkinitKdcState {
     pub fn verify_as_req(
         &self,
         pa_req_der: &[u8],
-        req_body_der: &[u8],
+        req_body_der: Option<&[u8]>,
         max_skew: i64,
         current_time: i64,
         _freshness_token: Option<&[u8]>,
@@ -102,11 +102,13 @@ impl PkinitKdcState {
         }
 
         if let Some(pa_checksum) = pk_auth.pa_checksum.as_ref() {
-            checksum::verify_checksums(
-                req_body_der,
-                pa_checksum.as_bytes(),
-                None,
-            )?;
+            if let Some(body) = req_body_der {
+                checksum::verify_checksums(
+                    body,
+                    pa_checksum.as_bytes(),
+                    None,
+                )?;
+            }
         }
 
         let client_dh_public = auth_pack
@@ -473,7 +475,7 @@ mod tests {
             .unwrap();
 
         let verified = server
-            .verify_as_req(&pa_req, req_body_der, 300, ctime, None)
+            .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
             .unwrap();
         assert!(!verified.is_anonymous);
 
