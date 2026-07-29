@@ -6,6 +6,7 @@ pub mod crypto;
 pub mod error;
 pub mod identity;
 pub mod san;
+pub mod server;
 
 pub use config::{PkinitClientConfig, PkinitKdcConfig};
 pub use constants::DhGroup;
