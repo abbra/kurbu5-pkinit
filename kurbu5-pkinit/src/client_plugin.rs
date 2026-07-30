@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 
 use kurbu5_rs::clpreauth::*;
 use kurbu5_rs::{Krb5Error, PluginContext};
@@ -203,15 +202,7 @@ impl ClpreauthModule for PkinitClient {
                     length: derived.key_data.len() as u32,
                     contents: derived.key_data.as_ptr() as *mut u8,
                 };
-                // KeyblockRef is { ptr: *mut krb5_keyblock, _phantom: PhantomData }
-                // and set_as_key copies the key contents, so the stack keyblock
-                // only needs to survive this call.
-                let key_ref: KeyblockRef<'_> = unsafe {
-                    std::mem::transmute((
-                        &mut keyblock as *mut kurbu5_sys::krb5_keyblock,
-                        PhantomData::<&()>,
-                    ))
-                };
+                let key_ref = unsafe { KeyblockRef::from_raw(&mut keyblock) };
                 callbacks.set_as_key(&key_ref)?;
 
                 Ok(vec![])
