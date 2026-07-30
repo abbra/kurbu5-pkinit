@@ -102,10 +102,10 @@ impl PkinitKemSuppPubInfo {
     }
 }
 
-/// Context tag byte for `PA-PK-AS-REP.kemInfo [2] IMPLICIT OCTET STRING`.
+/// Context tag byte for `PA-PK-AS-REP.kemInfo [2] IMPLICIT KemRepInfo`.
 ///
-/// Context-specific, primitive, tag number 2.
-pub const PA_PK_AS_REP_KEM_TAG: u8 = 0x82;
+/// Context-specific, constructed, tag number 2 (KemRepInfo is a SEQUENCE).
+pub const PA_PK_AS_REP_KEM_TAG: u8 = 0xA2;
 
 /// Check whether a DER-encoded PA-PK-AS-REP begins with the kemInfo [2] tag.
 pub fn is_kem_rep(pa_rep_der: &[u8]) -> bool {
@@ -371,9 +371,9 @@ mod tests {
 
     #[test]
     fn is_kem_rep_detects_tag() {
-        assert!(is_kem_rep(&[0x82, 0x03, 0x01, 0x02, 0x03]));
+        assert!(is_kem_rep(&[0xA2, 0x03, 0x01, 0x02, 0x03]));
         assert!(!is_kem_rep(&[0xA0, 0x03, 0x01, 0x02, 0x03]));
-        assert!(!is_kem_rep(&[0x81, 0x03, 0x01, 0x02, 0x03]));
+        assert!(!is_kem_rep(&[0x82, 0x03, 0x01, 0x02, 0x03]));
         assert!(!is_kem_rep(&[]));
     }
 
