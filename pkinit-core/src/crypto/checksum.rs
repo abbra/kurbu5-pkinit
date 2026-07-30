@@ -38,12 +38,12 @@ pub fn verify_checksums(
 
     match pa_checksum.len() {
         32 => {
-            if computed.sha256 != pa_checksum {
+            if !native_ossl::util::ct_eq(&computed.sha256, pa_checksum) {
                 return Err(PkinitError::ChecksumFailed);
             }
         }
         20 => {
-            if computed.sha1 != pa_checksum {
+            if !native_ossl::util::ct_eq(&computed.sha1, pa_checksum) {
                 return Err(PkinitError::ChecksumFailed);
             }
         }
@@ -64,7 +64,7 @@ pub fn verify_checksum2(
 ) -> Result<(), PkinitError> {
     let alg = oid_to_algorithm(algorithm_oid).ok_or(PkinitError::ChecksumFailed)?;
     let expected = hash_for_algorithm(alg, req_body_der)?;
-    if expected != checksum_bytes {
+    if !native_ossl::util::ct_eq(&expected, checksum_bytes) {
         return Err(PkinitError::ChecksumFailed);
     }
     Ok(())

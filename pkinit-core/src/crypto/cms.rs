@@ -496,7 +496,7 @@ fn verify_message_digest(
             let digest: OctetStringRef<'_> = inner
                 .decode()
                 .map_err(|e| PkinitError::CmsVerifyFailed(format!("parse digest value: {e}")))?;
-            if digest.as_bytes() == expected_digest {
+            if native_ossl::util::ct_eq(digest.as_bytes(), expected_digest) {
                 return Ok(());
             } else {
                 return Err(PkinitError::CmsVerifyFailed(
