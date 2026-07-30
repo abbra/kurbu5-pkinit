@@ -126,7 +126,7 @@ impl KdcpreauthModule for PkinitKdc {
         let verified =
             match self
                 .state
-                .verify_as_req(pa_contents, None, max_skew, current_time, None)
+                .verify_as_req(pa_contents, None, max_skew, current_time)
             {
                 Ok(v) => v,
                 Err(e) => {

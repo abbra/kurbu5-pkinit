@@ -203,7 +203,7 @@ fn run_dh_exchange(key_type: TestKeyType, dh_group: DhGroup, enctype: i32) {
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
 
     let verified = server
-        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
         .unwrap();
     assert!(!verified.is_anonymous);
 
@@ -270,7 +270,7 @@ fn run_anonymous_exchange(dh_group: DhGroup) {
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
 
     let verified = server
-        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
         .unwrap();
     assert!(verified.is_anonymous);
 
@@ -380,7 +380,7 @@ fn run_kem_exchange(kem_alg: KemAlgorithm, enctype: i32) {
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
 
     let verified = server
-        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
         .unwrap();
     assert!(!verified.is_anonymous);
     assert!(matches!(
@@ -469,7 +469,7 @@ fn pkinit_kem_anonymous_exchange() {
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
 
     let verified = server
-        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
         .unwrap();
     assert!(verified.is_anonymous);
 
@@ -541,7 +541,7 @@ fn pkinit_anonymous_rsa_exchange() {
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
 
     let verified = server
-        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
         .unwrap();
     assert!(verified.is_anonymous);
 

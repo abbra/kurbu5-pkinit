@@ -96,7 +96,6 @@ impl PkinitKdcState {
         req_body_der: Option<&[u8]>,
         max_skew: i64,
         current_time: i64,
-        _freshness_token: Option<&[u8]>,
     ) -> Result<VerifiedRequest, PkinitError> {
         let pa_req: synta_krb5::pkinit::PaPkAsReq<'_> =
             synta_krb5::pkinit::PaPkAsReq::from_der(pa_req_der)
@@ -172,6 +171,12 @@ impl PkinitKdcState {
                 client_time,
                 max_skew,
             });
+        }
+
+        if self.config.require_freshness && pk_auth.freshness_token.is_none() {
+            return Err(PkinitError::Config(
+                "freshness token required but not provided by client".into(),
+            ));
         }
 
         let pa_checksum2_info = pk_auth.pa_checksum2.as_ref().map(|pc2| {
@@ -634,7 +639,7 @@ mod tests {
         let pa_req = client.build_as_req(12345, ctime, 0, req_body_der).unwrap();
 
         let verified = server
-            .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
+            .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
             .unwrap();
         assert!(!verified.is_anonymous);
 
