@@ -5,6 +5,7 @@ pub mod constants;
 pub mod crypto;
 pub mod error;
 pub mod identity;
+pub mod kem_types;
 pub mod san;
 pub mod server;
 
