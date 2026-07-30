@@ -298,6 +298,32 @@ pub fn extract_unsigned_content(
     Ok((e_content.as_bytes().to_vec(), content_type))
 }
 
+/// Extract content directly from a ContentInfo without CMS SignedData wrapping.
+///
+/// Some implementations send anonymous PKINIT as a bare ContentInfo with
+/// contentType = id-pkinit-authData and the AuthPack as a direct OCTET STRING
+/// in the content field, rather than wrapping in CMS SignedData.
+pub fn extract_bare_content(
+    content_info_der: &[u8],
+) -> Result<(Vec<u8>, Vec<u32>), PkinitError> {
+    let ci = pkcs7_types::ContentInfo::from_der(content_info_der)
+        .map_err(|e| PkinitError::CmsVerifyFailed(format!("parse ContentInfo: {e}")))?;
+
+    let content_type = ci.content_type.components().to_vec();
+
+    let mut outer_dec = Decoder::new(ci.content.as_bytes(), Encoding::Der);
+    let inner = outer_dec
+        .enter_constructed(Tag::context_specific_constructed(0))
+        .map_err(|e| PkinitError::CmsVerifyFailed(format!("unwrap [0] EXPLICIT: {e}")))?;
+    let content_bytes = inner.remaining();
+
+    let content: synta::OctetStringRef<'_> = Decoder::new(content_bytes, Encoding::Der)
+        .decode()
+        .map_err(|e| PkinitError::CmsVerifyFailed(format!("extract OCTET STRING: {e}")))?;
+
+    Ok((content.as_bytes().to_vec(), content_type))
+}
+
 /// Create a CMS SignedData wrapped in ContentInfo with no signers (anonymous PKINIT).
 pub fn create_unsigned_data(content: &[u8], content_oid: &[u32]) -> Result<Vec<u8>, PkinitError> {
     let e_content_type = ObjectIdentifier::new(content_oid)

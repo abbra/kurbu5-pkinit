@@ -131,10 +131,10 @@ impl PkinitKdcState {
 
                 (v.content, v.signer_cert_der, false)
             }
-            Err(_) => {
+            Err(_cms_err) => {
                 let raw = pa_req.signed_auth_pack.as_bytes();
-                let auth_pack_der = match cms::extract_unsigned_content(raw) {
-                    Ok((content, ct)) => {
+                let auth_pack_der =
+                    if let Ok((content, ct)) = cms::extract_unsigned_content(raw) {
                         if ct.as_slice() != synta_krb5::pkinit::ID_PKINIT_AUTH_DATA {
                             return Err(PkinitError::CmsContentTypeMismatch {
                                 expected: "id-pkinit-authData".into(),
@@ -142,9 +142,19 @@ impl PkinitKdcState {
                             });
                         }
                         content
-                    }
-                    Err(_) => raw.to_vec(),
-                };
+                    } else if let Ok((content, ct)) = cms::extract_bare_content(raw) {
+                        if ct.as_slice() != synta_krb5::pkinit::ID_PKINIT_AUTH_DATA {
+                            return Err(PkinitError::CmsContentTypeMismatch {
+                                expected: "id-pkinit-authData".into(),
+                                actual: format!("{ct:?}"),
+                            });
+                        }
+                        content
+                    } else {
+                        return Err(PkinitError::CmsVerifyFailed(
+                            "failed to extract anonymous AuthPack from signedAuthPack".into(),
+                        ));
+                    };
                 (auth_pack_der, vec![], true)
             }
         };
