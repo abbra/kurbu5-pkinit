@@ -26,9 +26,6 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>, config: &mut P
     if let Ok(v) = profile.get_integer("libdefaults", "pkinit_dh_min_bits", None, 2048) {
         config.dh_min_bits = v as u32;
     }
-    if let Ok(v) = profile.get_boolean("libdefaults", "pkinit_require_hostname_match", None, true) {
-        config.require_hostname_match = v;
-    }
     if let Ok(v) = profile.get_string("libdefaults", "pkinit_eku_checking", None, None) {
         apply_eku_checking(
             &v,

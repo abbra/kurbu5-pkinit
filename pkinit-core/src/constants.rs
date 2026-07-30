@@ -117,11 +117,6 @@ pub use synta_certificate::oids::ML_KEM_512 as ID_ML_KEM_512;
 pub use synta_certificate::oids::ML_KEM_768 as ID_ML_KEM_768;
 pub use synta_certificate::oids::ML_KEM_1024 as ID_ML_KEM_1024;
 
-// Composite ML-KEM OIDs (draft-ietf-lamps-pq-composite-kem)
-pub const ID_MLKEM768_ECDH_P256: &[u32] = &[1, 3, 6, 1, 5, 5, 7, 6, 59];
-pub const ID_MLKEM768_X25519: &[u32] = &[1, 3, 6, 1, 5, 5, 7, 6, 58];
-pub const ID_MLKEM1024_ECDH_P384: &[u32] = &[1, 3, 6, 1, 5, 5, 7, 6, 63];
-
 // HKDF OID for KEM path KDF
 pub use synta_certificate::hkdf_oid_2019_types::ID_ALG_HKDF_WITH_SHA512;
 
@@ -215,13 +210,6 @@ mod tests {
         assert_eq!(ID_ML_KEM_512, &[2, 16, 840, 1, 101, 3, 4, 4, 1]);
         assert_eq!(ID_ML_KEM_768, &[2, 16, 840, 1, 101, 3, 4, 4, 2]);
         assert_eq!(ID_ML_KEM_1024, &[2, 16, 840, 1, 101, 3, 4, 4, 3]);
-    }
-
-    #[test]
-    fn composite_kem_oid_values() {
-        assert_eq!(ID_MLKEM768_ECDH_P256, &[1, 3, 6, 1, 5, 5, 7, 6, 59]);
-        assert_eq!(ID_MLKEM768_X25519, &[1, 3, 6, 1, 5, 5, 7, 6, 58]);
-        assert_eq!(ID_MLKEM1024_ECDH_P384, &[1, 3, 6, 1, 5, 5, 7, 6, 63]);
     }
 
     #[test]

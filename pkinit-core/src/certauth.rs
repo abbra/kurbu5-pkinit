@@ -5,8 +5,6 @@ use crate::san;
 #[derive(Debug, Clone, PartialEq)]
 pub enum CertauthResult {
     Authorized,
-    AuthorizedHwauth,
-    NoOpinion,
     Rejected(String),
 }
 

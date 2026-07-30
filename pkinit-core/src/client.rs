@@ -34,7 +34,6 @@ pub struct PkinitClientState {
     dh_key: Option<DhKeyPair>,
     kem_key: Option<KemKeyPair>,
     freshness_token: Option<Vec<u8>>,
-    rfc6112_kdc: bool,
     dh_nonce: Option<Vec<u8>>,
     kdc_principal: Option<String>,
     kdc_hostname: Option<String>,
@@ -53,7 +52,6 @@ impl PkinitClientState {
             dh_key: None,
             kem_key: None,
             freshness_token: None,
-            rfc6112_kdc: false,
             dh_nonce: None,
             kdc_principal: None,
             kdc_hostname: None,
@@ -74,10 +72,6 @@ impl PkinitClientState {
 
     pub fn set_freshness_token(&mut self, token: Vec<u8>) {
         self.freshness_token = Some(token);
-    }
-
-    pub fn set_rfc6112_kdc(&mut self, v: bool) {
-        self.rfc6112_kdc = v;
     }
 
     pub fn set_kdc_identity(&mut self, principal: String, hostname: Option<String>) {
@@ -637,22 +631,6 @@ mod tests {
         );
         state.set_freshness_token(vec![1, 2, 3]);
         assert_eq!(state.freshness_token, Some(vec![1, 2, 3]));
-    }
-
-    #[test]
-    fn set_rfc6112_kdc() {
-        let mut state = PkinitClientState::new(
-            PkinitIdentity {
-                cert_der: vec![],
-                key_pkcs8_der: vec![],
-                chain: vec![],
-            },
-            TrustStore::new(),
-            PkinitClientConfig::default(),
-        );
-        assert!(!state.rfc6112_kdc);
-        state.set_rfc6112_kdc(true);
-        assert!(state.rfc6112_kdc);
     }
 
     #[test]

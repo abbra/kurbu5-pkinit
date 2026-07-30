@@ -110,9 +110,6 @@ impl ClpreauthModule for PkinitClient {
         match pa_type {
             147 => {
                 pkinit_trace!(ctx, "PKINIT client received RFC 6112 support from KDC");
-                if let Some(state) = &mut self.state {
-                    state.set_rfc6112_kdc(true);
-                }
                 Ok(vec![])
             }
             150 => {

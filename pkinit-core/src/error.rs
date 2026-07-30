@@ -44,15 +44,6 @@ pub enum PkinitError {
     #[error("nonce mismatch: expected {expected}, got {actual}")]
     NonceMismatch { expected: i32, actual: i32 },
 
-    #[error("freshness token required but not provided")]
-    FreshnessRequired,
-
-    #[error("freshness token verification failed")]
-    FreshnessInvalid,
-
-    #[error("anonymous PKINIT not permitted")]
-    AnonymousNotPermitted,
-
     #[error("no supported KDF algorithm")]
     NoSupportedKdf,
 

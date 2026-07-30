@@ -329,10 +329,6 @@ impl CertauthModule for PkinitCertauth {
 
         match result {
             pkinit_core::certauth::CertauthResult::Authorized => Ok(CertauthDecision::Authorized),
-            pkinit_core::certauth::CertauthResult::AuthorizedHwauth => {
-                Ok(CertauthDecision::AuthorizedHwauth)
-            }
-            pkinit_core::certauth::CertauthResult::NoOpinion => Ok(CertauthDecision::NoOpinion),
             pkinit_core::certauth::CertauthResult::Rejected(_) => Ok(CertauthDecision::NoOpinion),
         }
     }
