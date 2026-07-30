@@ -26,17 +26,7 @@ fn hash_for_algorithm(algorithm: &str, data: &[u8]) -> Result<Vec<u8>, PkinitErr
 }
 
 fn oid_to_algorithm(oid: &[u32]) -> Option<&'static str> {
-    if oid == synta_certificate::oids::ID_SHA1 {
-        Some("sha1")
-    } else if oid == synta_certificate::oids::ID_SHA256 {
-        Some("sha256")
-    } else if oid == synta_certificate::oids::ID_SHA384 {
-        Some("sha384")
-    } else if oid == synta_certificate::oids::ID_SHA512 {
-        Some("sha512")
-    } else {
-        None
-    }
+    synta_certificate::oids::digest_oid_to_name(oid)
 }
 
 pub fn verify_checksums(

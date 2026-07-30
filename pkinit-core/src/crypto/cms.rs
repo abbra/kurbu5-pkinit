@@ -460,23 +460,13 @@ fn find_signer_cert(
     ))
 }
 
-/// Map an AlgorithmIdentifier to a hash algorithm name string.
 fn digest_alg_to_name(alg: &AlgorithmIdentifier<'_>) -> Result<&'static str, PkinitError> {
-    let comps = alg.algorithm.components();
-    if comps == synta_certificate::oids::ID_SHA1 {
-        Ok("sha1")
-    } else if comps == synta_certificate::oids::ID_SHA256 {
-        Ok("sha256")
-    } else if comps == synta_certificate::oids::ID_SHA384 {
-        Ok("sha384")
-    } else if comps == synta_certificate::oids::ID_SHA512 {
-        Ok("sha512")
-    } else {
-        Err(PkinitError::CmsVerifyFailed(format!(
+    synta_certificate::oids::digest_oid_to_name(alg.algorithm.components()).ok_or_else(|| {
+        PkinitError::CmsVerifyFailed(format!(
             "unsupported digest algorithm: {}",
             alg.algorithm
-        )))
-    }
+        ))
+    })
 }
 
 /// Verify that signedAttrs contains a messageDigest attribute matching
