@@ -411,16 +411,18 @@ impl PkinitClientState {
             ));
         }
 
-        if let Some(ref reply_nonce) = kdc_kem_info.nonce {
-            let n = reply_nonce
-                .as_i64()
-                .map_err(|e| PkinitError::Asn1(format!("nonce: {e}")))?;
-            if n != params.nonce as i64 {
-                return Err(PkinitError::NonceMismatch {
-                    expected: params.nonce,
-                    actual: n as i32,
-                });
-            }
+        let reply_nonce = kdc_kem_info
+            .nonce
+            .as_ref()
+            .ok_or_else(|| PkinitError::Asn1("KDC omitted required nonce in KDCKEMInfo".into()))?;
+        let n = reply_nonce
+            .as_i64()
+            .map_err(|e| PkinitError::Asn1(format!("nonce: {e}")))?;
+        if n != params.nonce as i64 {
+            return Err(PkinitError::NonceMismatch {
+                expected: params.nonce,
+                actual: n as i32,
+            });
         }
 
         let reply_kem_oid = kdc_kem_info.kem_algorithm.algorithm.components();
