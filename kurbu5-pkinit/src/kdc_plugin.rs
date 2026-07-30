@@ -322,11 +322,10 @@ impl CertauthModule for PkinitCertauth {
         princ: &kurbu5_sys::krb5_principal_data,
     ) -> Result<CertauthDecision, Krb5Error> {
         let princ_str = ctx.unparse_principal(princ)?;
-        let parts: Vec<&str> = princ_str.splitn(2, '@').collect();
-        if parts.len() != 2 {
-            return Ok(CertauthDecision::NoOpinion);
-        }
-        let (principal, realm) = (parts[0], parts[1]);
+        let (principal, realm) = match princ_str.split_once('@') {
+            Some(pair) => pair,
+            None => return Ok(CertauthDecision::NoOpinion),
+        };
 
         let result = certauth::verify_client_san(cert.as_der(), principal, realm, true)
             .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
