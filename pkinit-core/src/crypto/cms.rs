@@ -220,6 +220,7 @@ pub fn verify_signed_data(content_info_der: &[u8]) -> Result<VerifiedSignedData,
         .map_err(|e| PkinitError::CmsVerifyFailed(format!("hash content: {e}")))?;
 
     verify_message_digest(signed_attrs_raw.as_bytes(), &computed_digest)?;
+    verify_content_type(signed_attrs_raw.as_bytes(), &content_type)?;
 
     // Reconstruct the SET OF signedAttrs (with 0x31 tag) for verification
     // The stored signedAttrs has [0] IMPLICIT tag; we need to re-tag as SET
@@ -506,6 +507,44 @@ fn verify_message_digest(
     }
     Err(PkinitError::CmsVerifyFailed(
         "messageDigest attribute not found in signedAttrs".into(),
+    ))
+}
+
+fn verify_content_type(
+    signed_attrs_content: &[u8],
+    expected_content_type: &[u32],
+) -> Result<(), PkinitError> {
+    let id_ct = ObjectIdentifier::new(synta_certificate::oids::PKCS9_CONTENT_TYPE)
+        .map_err(|_| PkinitError::CmsVerifyFailed("invalid id-contentType OID".into()))?;
+
+    let mut dec = Decoder::new(signed_attrs_content, Encoding::Der);
+    while !dec.is_empty() {
+        let attr: Attribute<'_> = dec
+            .decode()
+            .map_err(|e| PkinitError::CmsVerifyFailed(format!("parse attribute: {e}")))?;
+        if attr.attr_type == id_ct {
+            let mut set_dec = Decoder::new(attr.attr_values.as_bytes(), Encoding::Der);
+            let mut inner = set_dec
+                .enter_constructed(Tag::universal_constructed(17))
+                .map_err(|e| {
+                    PkinitError::CmsVerifyFailed(format!("enter contentType attrValues SET: {e}"))
+                })?;
+            let oid: ObjectIdentifier = inner
+                .decode()
+                .map_err(|e| PkinitError::CmsVerifyFailed(format!("parse contentType OID: {e}")))?;
+            if oid.components() == expected_content_type {
+                return Ok(());
+            } else {
+                return Err(PkinitError::CmsVerifyFailed(format!(
+                    "contentType attribute {:?} does not match eContentType {:?}",
+                    oid.components(),
+                    expected_content_type
+                )));
+            }
+        }
+    }
+    Err(PkinitError::CmsVerifyFailed(
+        "contentType attribute not found in signedAttrs".into(),
     ))
 }
 
