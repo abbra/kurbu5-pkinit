@@ -3,6 +3,7 @@ mod kdc_plugin;
 mod o2k;
 mod principal;
 mod profile;
+mod trace;
 
 use client_plugin::PkinitClient;
 use kdc_plugin::{PkinitCertauth, PkinitKdc};
