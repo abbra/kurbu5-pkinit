@@ -171,6 +171,7 @@ dependencies = [
  "kurbu5-rs",
  "kurbu5-sys",
  "libc",
+ "native-ossl",
  "pkinit-core",
  "synta",
  "synta-krb5",
