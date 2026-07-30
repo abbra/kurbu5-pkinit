@@ -8,6 +8,7 @@ use pkinit_core::identity::{IdentitySource, PkinitIdentity, TrustStore};
 
 use crate::o2k::Krb5OctetString2Key;
 use crate::profile;
+use crate::trace::pkinit_trace;
 
 pub struct PkinitClient {
     state: Option<PkinitClientState>,
@@ -61,6 +62,7 @@ impl ClpreauthModule for PkinitClient {
         self.config = profile::read_client_config(&profile, realm.as_deref());
 
         let identity = if is_anonymous {
+            pkinit_trace!(ctx, "PKINIT client using anonymous mode");
             PkinitIdentity {
                 cert_der: vec![],
                 key_pkcs8_der: vec![],
@@ -68,13 +70,17 @@ impl ClpreauthModule for PkinitClient {
             }
         } else {
             let identity_str = self.config.identity.as_deref().ok_or(Krb5Error::NoHandle)?;
+            pkinit_trace!(ctx, "PKINIT loading identity {}", identity_str);
             let source =
                 IdentitySource::parse(identity_str).map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
-            PkinitIdentity::load(&source).map_err(|_| Krb5Error::Custom(libc::EINVAL))?
+            let id = PkinitIdentity::load(&source).map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
+            pkinit_trace!(ctx, "PKINIT loaded cert and key for {}", identity_str);
+            id
         };
 
         let mut trust_store = TrustStore::new();
         for anchor in &self.config.anchors {
+            pkinit_trace!(ctx, "PKINIT loading CA certs and CRLs from {}", anchor);
             trust_store
                 .load_from_path(anchor)
                 .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
@@ -103,12 +109,14 @@ impl ClpreauthModule for PkinitClient {
         let pa_type = req.pa_data.pa_type;
         match pa_type {
             147 => {
+                pkinit_trace!(ctx, "PKINIT client received RFC 6112 support from KDC");
                 if let Some(state) = &mut self.state {
                     state.set_rfc6112_kdc(true);
                 }
                 Ok(vec![])
             }
             150 => {
+                pkinit_trace!(ctx, "PKINIT client received freshness token from KDC");
                 let contents = pa_data_contents(req.pa_data);
                 if let Some(state) = &mut self.state {
                     state.set_freshness_token(contents);
@@ -123,6 +131,8 @@ impl ClpreauthModule for PkinitClient {
                     let _ = state.process_pkinit_hint(&hint_contents);
                 }
 
+                pkinit_trace!(ctx, "PKINIT client making DH request");
+
                 let nonce = unsafe { (*req.request).nonce };
                 let (ctime, cusec) = callbacks.get_preauth_time(true)?;
 
@@ -132,11 +142,15 @@ impl ClpreauthModule for PkinitClient {
 
                 let pa_req_der = state
                     .build_as_req(nonce, ctime as i64, cusec, req_body_der)
-                    .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
+                    .map_err(|e| {
+                        pkinit_trace!(ctx, "PKINIT client failed to build AS-REQ: {}", e);
+                        Krb5Error::Custom(libc::EINVAL)
+                    })?;
 
                 Ok(vec![PaData::new(16, pa_req_der)])
             }
             17 => {
+                pkinit_trace!(ctx, "PKINIT client processing AS-REP");
                 let state = self.state.as_mut().ok_or(Krb5Error::Custom(libc::EINVAL))?;
 
                 let nonce = unsafe { (*req.request).nonce };
@@ -177,7 +191,11 @@ impl ClpreauthModule for PkinitClient {
                         },
                         &o2k,
                     )
-                    .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
+                    .map_err(|e| {
+                        pkinit_trace!(ctx, "PKINIT client could not verify reply: {}", e);
+                        Krb5Error::Custom(libc::EINVAL)
+                    })?;
+                pkinit_trace!(ctx, "PKINIT client verified DH reply");
 
                 let mut keyblock = kurbu5_sys::krb5_keyblock {
                     magic: 0,
@@ -204,10 +222,14 @@ impl ClpreauthModule for PkinitClient {
 
     fn tryagain(
         &mut self,
-        _ctx: &PluginContext<'_>,
+        ctx: &PluginContext<'_>,
         _callbacks: &mut ClpreauthCallbacks<'_>,
         req: &TryagainRequest<'_>,
     ) -> Result<Vec<PaData>, Krb5Error> {
+        pkinit_trace!(
+            ctx,
+            "PKINIT client trying again with KDC-provided parameters"
+        );
         let state = self.state.as_mut().ok_or(Krb5Error::NoHandle)?;
 
         if req.error_padata.is_null() {
