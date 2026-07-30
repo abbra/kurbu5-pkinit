@@ -19,6 +19,8 @@ pub struct VerifiedSignedData {
     pub signer_cert_der: Vec<u8>,
     /// All certificates from the SignedData certificates field.
     pub all_certs_der: Vec<Vec<u8>>,
+    /// The signature algorithm OID used by the signer.
+    pub signer_algorithm_oid: Vec<u32>,
 }
 
 /// Create a CMS SignedData wrapped in ContentInfo.
@@ -232,11 +234,18 @@ pub fn verify_signed_data(content_info_der: &[u8]) -> Result<VerifiedSignedData,
         .verify_signature(&to_verify, &sig_alg_der, signer_info.signature.as_bytes())
         .map_err(|e| PkinitError::CmsVerifyFailed(format!("signature invalid: {e}")))?;
 
+    let signer_algorithm_oid = signer_info
+        .signature_algorithm
+        .algorithm
+        .components()
+        .to_vec();
+
     Ok(VerifiedSignedData {
         content,
         content_type,
         signer_cert_der,
         all_certs_der,
+        signer_algorithm_oid,
     })
 }
 
@@ -641,6 +650,63 @@ mod tests {
         let (key, cert_der) = generate_test_keypair_and_cert();
         let result = create_signed_data(b"test", &[1, 2, 3], key.as_ref(), &cert_der, &[], "md5");
         assert!(result.is_err());
+    }
+
+    fn generate_rsa_keypair_and_cert() -> (Box<dyn PrivateKey>, Vec<u8>) {
+        use synta::{Integer, UtcTime};
+        use synta_certificate::{CertificateBuilder, NameBuilder, Time};
+
+        let key = PrivateKeyBuilder::rsa(2048)
+            .generate()
+            .expect("generate RSA key");
+
+        let spki_der = key.public_key_spki_der().expect("public key");
+        let name = NameBuilder::new()
+            .common_name("Test RSA Signer")
+            .build()
+            .expect("build name");
+
+        let cert_der = CertificateBuilder::new()
+            .subject_name(&name)
+            .issuer_name(&name)
+            .public_key_der(&spki_der)
+            .serial_number(Integer::from_i64(1))
+            .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
+            .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+            .sign(&key.as_signer("sha256"))
+            .expect("sign cert");
+
+        (key, cert_der)
+    }
+
+    #[test]
+    fn round_trip_signed_data_rsa() {
+        let (key, cert_der) = generate_rsa_keypair_and_cert();
+        let content = b"test PKINIT RSA content";
+        let content_oid: &[u32] = &[1, 3, 6, 1, 5, 2, 3, 1];
+
+        let ci_der =
+            create_signed_data(content, content_oid, key.as_ref(), &cert_der, &[], "sha256")
+                .expect("create signed data with RSA");
+
+        let verified = verify_signed_data(&ci_der).expect("verify RSA signed data");
+        assert_eq!(verified.content, content);
+        assert_eq!(verified.content_type, content_oid);
+        assert_eq!(verified.signer_cert_der, cert_der);
+    }
+
+    #[test]
+    fn round_trip_rsa_sha384() {
+        let (key, cert_der) = generate_rsa_keypair_and_cert();
+        let content = b"RSA sha384 content";
+        let content_oid: &[u32] = &[1, 3, 6, 1, 5, 2, 3, 1];
+
+        let ci_der =
+            create_signed_data(content, content_oid, key.as_ref(), &cert_der, &[], "sha384")
+                .expect("create signed data");
+
+        let verified = verify_signed_data(&ci_der).expect("verify RSA sha384");
+        assert_eq!(verified.content, content);
     }
 
     #[test]

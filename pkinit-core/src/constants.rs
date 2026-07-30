@@ -103,6 +103,11 @@ pub use synta_certificate::hkdf_oid_2019_types::ID_ALG_HKDF_WITH_SHA512;
 // CMS content type for KDCKEMInfo (id-pkinit arc, TBD by IANA)
 pub const ID_PKINIT_KEM_KEY_DATA: &[u32] = &[1, 3, 6, 1, 5, 2, 3, 7];
 
+// ML-DSA OIDs (FIPS 204, RFC 9935) — for downgrade prevention checks
+pub use synta_certificate::oids::ML_DSA_44 as ID_ML_DSA_44;
+pub use synta_certificate::oids::ML_DSA_65 as ID_ML_DSA_65;
+pub use synta_certificate::oids::ML_DSA_87 as ID_ML_DSA_87;
+
 // Microsoft EKU/SAN OIDs — re-exported from synta-certificate (MicrosoftPKI.asn1)
 pub use synta_certificate::oids::ID_MS_KP_SMARTCARD_LOGON;
 pub use synta_certificate::oids::ID_MS_SAN_UPN;

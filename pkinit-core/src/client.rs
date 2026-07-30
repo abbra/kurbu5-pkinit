@@ -63,6 +63,10 @@ impl PkinitClientState {
         self.dh_key.is_some()
     }
 
+    pub fn has_pq_certificate(&self) -> bool {
+        !self.identity.cert_der.is_empty() && is_pq_signing_certificate(&self.identity.cert_der)
+    }
+
     pub fn set_freshness_token(&mut self, token: Vec<u8>) {
         self.freshness_token = Some(token);
     }
@@ -376,6 +380,12 @@ impl PkinitClientState {
             });
         }
 
+        if self.has_pq_certificate() && !is_pq_signature_algorithm(&verified.signer_algorithm_oid) {
+            return Err(PkinitError::DowngradeRejected(
+                "KDC must use quantum-resistant signature with PQ client".into(),
+            ));
+        }
+
         self.trust_store.validate_chain(
             &verified.signer_cert_der,
             &verified.all_certs_der,
@@ -539,6 +549,21 @@ fn rebuild_dh_spki(group: DhGroup, pub_key_bits: &[u8]) -> Result<Vec<u8>, Pkini
 
     spki.to_der()
         .map_err(|e| PkinitError::Asn1(format!("encode DH SPKI: {e}")))
+}
+
+fn is_pq_signature_algorithm(oid: &[u32]) -> bool {
+    oid == constants::ID_ML_DSA_44
+        || oid == constants::ID_ML_DSA_65
+        || oid == constants::ID_ML_DSA_87
+}
+
+pub fn is_pq_signing_certificate(cert_der: &[u8]) -> bool {
+    let cert = match synta_certificate::Certificate::from_der(cert_der) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let sig_alg_oid = cert.tbs_certificate.signature.algorithm.components();
+    is_pq_signature_algorithm(sig_alg_oid)
 }
 
 #[cfg(test)]
