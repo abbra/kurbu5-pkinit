@@ -49,6 +49,47 @@ impl PkinitKdcState {
         }
     }
 
+    pub fn build_supported_algorithms_hint(&self) -> Result<Vec<u8>, PkinitError> {
+        let mut oids: Vec<&[u32]> = Vec::new();
+        for alg in &self.config.supported_kem_algorithms {
+            oids.push(alg.oid());
+        }
+        crate::kem_types::encode_pkinit_hint(&oids)
+    }
+
+    pub fn build_td_ephemeral_key_params(&self) -> Result<Vec<u8>, PkinitError> {
+        use synta::Encode;
+
+        let mut oids: Vec<&[u32]> = Vec::new();
+        for alg in &self.config.supported_kem_algorithms {
+            oids.push(alg.oid());
+        }
+
+        let obj_oids: Vec<synta::ObjectIdentifier> = oids
+            .iter()
+            .map(|oid| {
+                synta::ObjectIdentifier::new(oid)
+                    .map_err(|e| PkinitError::Asn1(format!("OID: {e}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let alg_ids: Vec<synta_certificate::AlgorithmIdentifier<'_>> = obj_oids
+            .iter()
+            .map(|oid| synta_certificate::AlgorithmIdentifier {
+                algorithm: oid.clone(),
+                parameters: None,
+            })
+            .collect();
+
+        let mut encoder = synta::Encoder::new(synta::Encoding::Der);
+        alg_ids
+            .encode(&mut encoder)
+            .map_err(|e| PkinitError::Asn1(format!("encode TD params: {e}")))?;
+        encoder
+            .finish()
+            .map_err(|e| PkinitError::Asn1(format!("finish TD params: {e}")))
+    }
+
     pub fn verify_as_req(
         &self,
         pa_req_der: &[u8],
@@ -147,6 +188,13 @@ impl PkinitKdcState {
 
         let key_exchange = match detect_spki_algorithm(&client_dh_public)? {
             Some(kem_alg) => {
+                if !self.config.supported_kem_algorithms.is_empty()
+                    && !self.config.supported_kem_algorithms.contains(&kem_alg)
+                {
+                    return Err(PkinitError::KemAlgorithmNotSupported(
+                        kem_alg.parameter_set_name().into(),
+                    ));
+                }
                 if auth_pack.client_dhnonce.is_some() {
                     return Err(PkinitError::DhParamsRejected(
                         "clientDHNonce must be absent for KEM".into(),

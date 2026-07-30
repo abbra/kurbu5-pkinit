@@ -2,7 +2,7 @@ use synta::{GeneralizedTime, OctetStringRef, ToDer};
 
 use crate::certauth;
 use crate::config::PkinitClientConfig;
-use crate::constants::{self, DhGroup};
+use crate::constants::{self, DhGroup, KemAlgorithm};
 use crate::crypto::checksum;
 use crate::crypto::cms;
 use crate::crypto::dh::{self, DhKeyPair};
@@ -74,6 +74,30 @@ impl PkinitClientState {
     pub fn set_kdc_identity(&mut self, principal: String, hostname: Option<String>) {
         self.kdc_principal = Some(principal);
         self.kdc_hostname = hostname;
+    }
+
+    pub fn process_pkinit_hint(&mut self, hint_der: &[u8]) -> Result<(), PkinitError> {
+        let oids = crate::kem_types::parse_pkinit_hint(hint_der)?;
+
+        if oids.is_empty() {
+            return Ok(());
+        }
+
+        if let Some(current_kem) = self.config.kem_algorithm
+            && oids.iter().any(|oid| oid.as_slice() == current_kem.oid())
+        {
+            return Ok(());
+        }
+
+        for oid in &oids {
+            if let Some(kem_alg) = KemAlgorithm::from_oid(oid) {
+                self.config.kem_algorithm = Some(kem_alg);
+                self.kem_key = None;
+                return Ok(());
+            }
+        }
+
+        Ok(())
     }
 
     pub fn build_as_req(
@@ -564,6 +588,64 @@ mod tests {
         assert!(!state.rfc6112_kdc);
         state.set_rfc6112_kdc(true);
         assert!(state.rfc6112_kdc);
+    }
+
+    #[test]
+    fn process_pkinit_hint_selects_kem() {
+        let mut state = PkinitClientState::new(
+            PkinitIdentity {
+                cert_der: vec![],
+                key_pkcs8_der: vec![],
+                chain: vec![],
+            },
+            TrustStore::new(),
+            PkinitClientConfig::default(),
+        );
+        assert!(state.config.kem_algorithm.is_none());
+
+        let hint_der =
+            crate::kem_types::encode_pkinit_hint(&[crate::constants::ID_ML_KEM_768]).unwrap();
+        state.process_pkinit_hint(&hint_der).unwrap();
+        assert_eq!(state.config.kem_algorithm, Some(KemAlgorithm::MlKem768));
+    }
+
+    #[test]
+    fn process_pkinit_hint_keeps_matching_kem() {
+        let mut config = PkinitClientConfig::default();
+        config.kem_algorithm = Some(KemAlgorithm::MlKem1024);
+        let mut state = PkinitClientState::new(
+            PkinitIdentity {
+                cert_der: vec![],
+                key_pkcs8_der: vec![],
+                chain: vec![],
+            },
+            TrustStore::new(),
+            config,
+        );
+
+        let hint_der = crate::kem_types::encode_pkinit_hint(&[
+            crate::constants::ID_ML_KEM_768,
+            crate::constants::ID_ML_KEM_1024,
+        ])
+        .unwrap();
+        state.process_pkinit_hint(&hint_der).unwrap();
+        assert_eq!(state.config.kem_algorithm, Some(KemAlgorithm::MlKem1024));
+    }
+
+    #[test]
+    fn process_pkinit_hint_empty_is_noop() {
+        let mut state = PkinitClientState::new(
+            PkinitIdentity {
+                cert_der: vec![],
+                key_pkcs8_der: vec![],
+                chain: vec![],
+            },
+            TrustStore::new(),
+            PkinitClientConfig::default(),
+        );
+        let hint_der = crate::kem_types::encode_pkinit_hint(&[]).unwrap();
+        state.process_pkinit_hint(&hint_der).unwrap();
+        assert!(state.config.kem_algorithm.is_none());
     }
 
     #[test]

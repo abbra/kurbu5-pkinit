@@ -54,6 +54,7 @@ pub struct PkinitKdcConfig {
     pub intermediates: Vec<String>,
     pub crls: Vec<String>,
     pub auth_indicators: Vec<String>,
+    pub supported_kem_algorithms: Vec<KemAlgorithm>,
 }
 
 impl Default for PkinitKdcConfig {
@@ -70,6 +71,7 @@ impl Default for PkinitKdcConfig {
             intermediates: Vec::new(),
             crls: Vec::new(),
             auth_indicators: Vec::new(),
+            supported_kem_algorithms: Vec::new(),
         }
     }
 }

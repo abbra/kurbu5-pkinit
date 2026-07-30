@@ -70,7 +70,16 @@ impl KdcpreauthModule for PkinitKdc {
         respond: Box<dyn FnOnce(Result<Option<PaData>, Krb5Error>)>,
     ) {
         callbacks.send_freshness_token();
-        respond(Ok(None));
+
+        if self.config.supported_kem_algorithms.is_empty() {
+            respond(Ok(None));
+            return;
+        }
+
+        match self.state.build_supported_algorithms_hint() {
+            Ok(hint_der) => respond(Ok(Some(PaData::new(16, hint_der)))),
+            Err(_) => respond(Ok(None)),
+        }
     }
 
     fn verify(

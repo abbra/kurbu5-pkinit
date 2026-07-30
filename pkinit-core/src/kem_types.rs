@@ -198,6 +198,106 @@ fn der_encode_length(len: usize, out: &mut Vec<u8>) {
     }
 }
 
+/// Encode a `PA-PK-AS-REQ-Hint` containing `ephemeralKeyParameters`.
+///
+/// ```asn1
+/// PA-PK-AS-REQ-Hint ::= SEQUENCE {
+///     ephemeralKeyParameters [0] SEQUENCE OF AlgorithmIdentifier OPTIONAL,
+///     ...
+/// }
+/// ```
+pub fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, crate::error::PkinitError> {
+    use synta::Encode;
+
+    if algorithm_oids.is_empty() {
+        let mut encoder = synta::Encoder::new(synta::Encoding::Der);
+        let empty_seq: Vec<AlgorithmIdentifier<'_>> = vec![];
+        empty_seq
+            .encode(&mut encoder)
+            .map_err(|e| crate::error::PkinitError::Asn1(format!("encode hint: {e}")))?;
+        return encoder
+            .finish()
+            .map_err(|e| crate::error::PkinitError::Asn1(format!("finish hint: {e}")));
+    }
+
+    let oids: Vec<synta::ObjectIdentifier> = algorithm_oids
+        .iter()
+        .map(|oid| {
+            synta::ObjectIdentifier::new(oid)
+                .map_err(|e| crate::error::PkinitError::Asn1(format!("OID: {e}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let alg_ids: Vec<AlgorithmIdentifier<'_>> = oids
+        .iter()
+        .map(|oid| AlgorithmIdentifier {
+            algorithm: oid.clone(),
+            parameters: None,
+        })
+        .collect();
+
+    let mut inner_encoder = synta::Encoder::new(synta::Encoding::Der);
+    alg_ids
+        .encode(&mut inner_encoder)
+        .map_err(|e| crate::error::PkinitError::Asn1(format!("encode alg ids: {e}")))?;
+    let seq_of_der = inner_encoder
+        .finish()
+        .map_err(|e| crate::error::PkinitError::Asn1(format!("finish alg ids: {e}")))?;
+
+    // Wrap in [0] EXPLICIT tag
+    let mut tagged = Vec::with_capacity(1 + 4 + seq_of_der.len());
+    tagged.push(0xA0); // context [0] constructed
+    der_encode_length(seq_of_der.len(), &mut tagged);
+    tagged.extend_from_slice(&seq_of_der);
+
+    // Wrap in outer SEQUENCE
+    let mut out = Vec::with_capacity(1 + 4 + tagged.len());
+    out.push(0x30); // SEQUENCE
+    der_encode_length(tagged.len(), &mut out);
+    out.extend_from_slice(&tagged);
+
+    Ok(out)
+}
+
+/// Parse `ephemeralKeyParameters` OIDs from a `PA-PK-AS-REQ-Hint`.
+///
+/// Returns the list of algorithm OIDs found in the hint. If the hint is
+/// empty or has no `ephemeralKeyParameters`, returns an empty vec.
+pub fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, crate::error::PkinitError> {
+    // Outer SEQUENCE
+    if hint_der.is_empty() || hint_der[0] != 0x30 {
+        return Err(crate::error::PkinitError::Asn1(
+            "PA-PK-AS-REQ-Hint: expected SEQUENCE".into(),
+        ));
+    }
+    let (outer_len, outer_hdr) = der_parse_length(&hint_der[1..])?;
+    let outer_content = &hint_der[1 + outer_hdr..1 + outer_hdr + outer_len];
+
+    if outer_content.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Look for [0] EXPLICIT tag (0xA0)
+    if outer_content[0] != 0xA0 {
+        return Ok(vec![]);
+    }
+    let (tag0_len, tag0_hdr) = der_parse_length(&outer_content[1..])?;
+    let tag0_content = &outer_content[1 + tag0_hdr..1 + tag0_hdr + tag0_len];
+
+    // tag0_content is SEQUENCE OF AlgorithmIdentifier
+    let alg_ids: Vec<AlgorithmIdentifier<'_>> =
+        synta::Decoder::new(tag0_content, synta::Encoding::Der)
+            .decode()
+            .map_err(|e| {
+                crate::error::PkinitError::Asn1(format!("decode ephemeralKeyParameters: {e}"))
+            })?;
+
+    Ok(alg_ids
+        .iter()
+        .map(|a| a.algorithm.components().to_vec())
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +387,33 @@ mod tests {
         let content = decode_kem_rep_content(&wrapped).unwrap();
         let decoded = KemRepInfo::from_der(&content).unwrap();
         assert_eq!(info, decoded);
+    }
+
+    #[test]
+    fn pkinit_hint_roundtrip() {
+        use crate::constants;
+        let oids: Vec<&[u32]> = vec![constants::ID_ML_KEM_768, constants::ID_ML_KEM_1024];
+        let hint_der = encode_pkinit_hint(&oids).unwrap();
+        let parsed = parse_pkinit_hint(&hint_der).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].as_slice(), constants::ID_ML_KEM_768);
+        assert_eq!(parsed[1].as_slice(), constants::ID_ML_KEM_1024);
+    }
+
+    #[test]
+    fn pkinit_hint_empty_oids() {
+        let hint_der = encode_pkinit_hint(&[]).unwrap();
+        let parsed = parse_pkinit_hint(&hint_der).unwrap();
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn pkinit_hint_single_oid() {
+        use crate::constants;
+        let oids: Vec<&[u32]> = vec![constants::ID_ML_KEM_512];
+        let hint_der = encode_pkinit_hint(&oids).unwrap();
+        let parsed = parse_pkinit_hint(&hint_der).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].as_slice(), constants::ID_ML_KEM_512);
     }
 }

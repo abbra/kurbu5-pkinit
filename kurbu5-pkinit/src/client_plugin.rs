@@ -118,6 +118,11 @@ impl ClpreauthModule for PkinitClient {
             16 => {
                 let state = self.state.as_mut().ok_or(Krb5Error::Custom(libc::EINVAL))?;
 
+                let hint_contents = pa_data_contents(req.pa_data);
+                if !hint_contents.is_empty() {
+                    let _ = state.process_pkinit_hint(&hint_contents);
+                }
+
                 let nonce = unsafe { (*req.request).nonce };
                 let (ctime, cusec) = callbacks.get_preauth_time(true)?;
 
