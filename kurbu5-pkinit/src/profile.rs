@@ -1,6 +1,6 @@
 use kurbu5_rs::Profile;
 use pkinit_core::config::{PkinitClientConfig, PkinitKdcConfig};
-use pkinit_core::constants::DhGroup;
+use pkinit_core::constants::{DhGroup, KemAlgorithm};
 
 pub fn read_client_config(profile: &Profile, realm: Option<&str>) -> PkinitClientConfig {
     let mut config = PkinitClientConfig::default();
@@ -38,6 +38,9 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>) -> PkinitClien
     {
         config.require_freshness = v;
     }
+    if let Ok(v) = profile.get_string("libdefaults", "pkinit_pqc_min_algorithm", None, None) {
+        config.kem_algorithm = KemAlgorithm::from_name(&v);
+    }
 
     if let Some(realm) = realm {
         if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_identities"), None) {
@@ -66,6 +69,9 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>) -> PkinitClien
                 &mut config.require_eku,
                 &mut config.accept_secondary_eku,
             );
+        }
+        if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_pqc_min_algorithm"), None) {
+            config.kem_algorithm = KemAlgorithm::from_name(&v);
         }
     }
 
@@ -108,6 +114,11 @@ pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
     if let Ok(indicators) = profile.get_values(&["kdcdefaults", "pkinit_indicator"]) {
         config.auth_indicators = indicators;
     }
+    if let Ok(v) = profile.get_string("kdcdefaults", "pkinit_pqc_min_algorithm", None, None)
+        && let Some(alg) = KemAlgorithm::from_name(&v)
+    {
+        config.supported_kem_algorithms = alg.algorithms_at_or_above();
+    }
 
     if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_identity"), None) {
         config.identity = Some(v);
@@ -137,6 +148,11 @@ pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
     }
     if let Ok(indicators) = profile.get_values(&["realms", realm, "pkinit_indicator"]) {
         config.auth_indicators = indicators;
+    }
+    if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_pqc_min_algorithm"), None)
+        && let Some(alg) = KemAlgorithm::from_name(&v)
+    {
+        config.supported_kem_algorithms = alg.algorithms_at_or_above();
     }
 
     config
