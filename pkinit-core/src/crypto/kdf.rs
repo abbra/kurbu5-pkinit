@@ -17,12 +17,10 @@ pub trait OctetString2Key {
 /// Select the best KDF algorithm from the client's supported list.
 /// Server preference order: SHA-256 > SHA-1 > SHA-512.
 pub fn pick_kdf_alg(client_kdfs: &[Vec<u32>]) -> Option<&'static [u32]> {
-    for preferred in constants::KDF_PREFERENCE_ORDER {
-        if client_kdfs.iter().any(|k| k.as_slice() == *preferred) {
-            return Some(preferred);
-        }
-    }
-    None
+    constants::KDF_PREFERENCE_ORDER
+        .iter()
+        .find(|preferred| client_kdfs.iter().any(|k| k.as_slice() == **preferred))
+        .copied()
 }
 
 fn kdf_oid_to_digest_name(kdf_oid: &[u32]) -> Result<&'static std::ffi::CStr, PkinitError> {
@@ -37,22 +35,18 @@ fn kdf_oid_to_digest_name(kdf_oid: &[u32]) -> Result<&'static std::ffi::CStr, Pk
     }
 }
 
-/// SP800-56A single-step KDF for PKINIT (RFC 8636).
-///
-/// Constructs OtherInfo from the KDF algorithm identifier, party U/V info
-/// (DER-encoded principal names), and SuppPubInfo (enctype + AS-REQ/PA-PK-AS-REP),
-/// then runs OpenSSL's SSKDF with the specified hash algorithm.
-///
-/// The caller must provide an `OctetString2Key` implementation for the final
-/// `random_to_key` conversion.
+pub struct KdfInput<'a> {
+    pub shared_secret: &'a [u8],
+    pub kdf_oid: &'a [u32],
+    pub enctype: i32,
+    pub party_u_info: &'a [u8],
+    pub party_v_info: &'a [u8],
+    pub as_req_der: &'a [u8],
+    pub pa_pk_as_rep_der: &'a [u8],
+}
+
 pub fn pkinit_kdf(
-    shared_secret: &[u8],
-    kdf_oid: &[u32],
-    enctype: i32,
-    party_u_info: &[u8],
-    party_v_info: &[u8],
-    as_req_der: &[u8],
-    pa_pk_as_rep_der: &[u8],
+    input: &KdfInput<'_>,
     o2k: &dyn OctetString2Key,
 ) -> Result<DerivedKey, PkinitError> {
     use synta::Encode;
@@ -60,16 +54,16 @@ pub fn pkinit_kdf(
         AlgorithmIdentifier, OtherInfo, PkinitSuppPubInfo,
     };
 
-    let digest_name = kdf_oid_to_digest_name(kdf_oid)?;
-    let rand_len = o2k.random_length(enctype)?;
+    let digest_name = kdf_oid_to_digest_name(input.kdf_oid)?;
+    let rand_len = o2k.random_length(input.enctype)?;
 
-    let oid = synta::ObjectIdentifier::new(kdf_oid)
+    let oid = synta::ObjectIdentifier::new(input.kdf_oid)
         .map_err(|e| PkinitError::Asn1(format!("KDF OID: {e}")))?;
 
     let supp_pub_info = PkinitSuppPubInfo {
-        enctype: synta::Integer::from(enctype),
-        as_req: as_req_der.to_vec().into(),
-        pk_as_rep: pa_pk_as_rep_der.to_vec().into(),
+        enctype: synta::Integer::from(input.enctype),
+        as_req: input.as_req_der.to_vec().into(),
+        pk_as_rep: input.pa_pk_as_rep_der.to_vec().into(),
     };
     let supp_pub_info_der = supp_pub_info
         .to_der()
@@ -80,8 +74,8 @@ pub fn pkinit_kdf(
             algorithm: oid,
             parameters: None,
         },
-        party_uinfo: party_u_info.to_vec().into(),
-        party_vinfo: party_v_info.to_vec().into(),
+        party_uinfo: input.party_u_info.to_vec().into(),
+        party_vinfo: input.party_v_info.to_vec().into(),
         supp_pub_info: Some(supp_pub_info_der.into()),
         supp_priv_info: None,
     };
@@ -94,10 +88,50 @@ pub fn pkinit_kdf(
         .finish()
         .map_err(|e| PkinitError::Asn1(format!("finish OtherInfo: {e}")))?;
 
-    let random_data = sskdf(digest_name, shared_secret, &other_info_der, rand_len)?;
+    let random_data = sskdf(digest_name, input.shared_secret, &other_info_der, rand_len)?;
 
-    let key_data = o2k.random_to_key(enctype, &random_data)?;
-    Ok(DerivedKey { enctype, key_data })
+    let key_data = o2k.random_to_key(input.enctype, &random_data)?;
+    Ok(DerivedKey {
+        enctype: input.enctype,
+        key_data,
+    })
+}
+
+pub struct KemKdfInput<'a> {
+    pub shared_secret: &'a [u8],
+    pub enctype: i32,
+    pub as_req_der: &'a [u8],
+    pub kem_signed_data: &'a [u8],
+}
+
+pub fn pkinit_kem_kdf(
+    input: &KemKdfInput<'_>,
+    o2k: &dyn OctetString2Key,
+) -> Result<DerivedKey, PkinitError> {
+    use crate::kem_types::PkinitKemSuppPubInfo;
+
+    let rand_len = o2k.random_length(input.enctype)?;
+
+    let supp_pub_info = PkinitKemSuppPubInfo {
+        enctype: synta::Integer::from(input.enctype),
+        as_req: input.as_req_der.to_vec().into(),
+        kem_signed_data: input.kem_signed_data.to_vec().into(),
+    };
+    let supp_pub_info_der = supp_pub_info
+        .to_der()
+        .map_err(|e| PkinitError::Asn1(format!("encode PkinitKEMSuppPubInfo: {e}")))?;
+
+    let hmac = synta_certificate::default_hmac_provider();
+    let prk = synta_certificate::hkdf_extract(&hmac, "sha512", None, input.shared_secret)
+        .map_err(|e| PkinitError::KdfFailed(format!("HKDF-Extract: {e}")))?;
+    let okm = synta_certificate::hkdf_expand(&hmac, "sha512", &prk, &supp_pub_info_der, rand_len)
+        .map_err(|e| PkinitError::KdfFailed(format!("HKDF-Expand: {e}")))?;
+
+    let key_data = o2k.random_to_key(input.enctype, &okm)?;
+    Ok(DerivedKey {
+        enctype: input.enctype,
+        key_data,
+    })
 }
 
 fn sskdf(
@@ -146,7 +180,7 @@ pub fn encode_principal_for_kdf(name: &str) -> Result<Vec<u8>, PkinitError> {
         .ok_or_else(|| PkinitError::Asn1(format!("invalid principal name: {name}")))?;
     let realm_str = realm_opt
         .as_ref()
-        .map(|r| synta_krb5::principal::realm_to_string(r))
+        .map(synta_krb5::principal::realm_to_string)
         .unwrap_or_default();
     synta_krb5::principal::encode_krb5_principal_name_from_parts(
         pname.name_type.get(),
@@ -240,13 +274,15 @@ mod tests {
         let as_req = b"mock-as-req-der";
         let pk_as_rep = b"mock-pk-as-rep-der";
         let result = pkinit_kdf(
-            &shared_secret,
-            constants::ID_PKINIT_KDF_AH_SHA256,
-            18,
-            party_u,
-            party_v,
-            as_req,
-            pk_as_rep,
+            &KdfInput {
+                shared_secret: &shared_secret,
+                kdf_oid: constants::ID_PKINIT_KDF_AH_SHA256,
+                enctype: 18,
+                party_u_info: party_u,
+                party_v_info: party_v,
+                as_req_der: as_req,
+                pa_pk_as_rep_der: pk_as_rep,
+            },
             &MockO2K,
         );
         assert!(result.is_ok());
@@ -259,13 +295,15 @@ mod tests {
     fn kdf_sha1_produces_output() {
         let shared_secret = vec![0xCDu8; 32];
         let result = pkinit_kdf(
-            &shared_secret,
-            constants::ID_PKINIT_KDF_AH_SHA1,
-            17,
-            b"client",
-            b"kdc",
-            b"as-req",
-            b"pk-as-rep",
+            &KdfInput {
+                shared_secret: &shared_secret,
+                kdf_oid: constants::ID_PKINIT_KDF_AH_SHA1,
+                enctype: 17,
+                party_u_info: b"client",
+                party_v_info: b"kdc",
+                as_req_der: b"as-req",
+                pa_pk_as_rep_der: b"pk-as-rep",
+            },
             &MockO2K,
         );
         assert!(result.is_ok());
@@ -278,13 +316,15 @@ mod tests {
     fn kdf_sha512_produces_output() {
         let shared_secret = vec![0xEFu8; 64];
         let result = pkinit_kdf(
-            &shared_secret,
-            constants::ID_PKINIT_KDF_AH_SHA512,
-            18,
-            b"client",
-            b"kdc",
-            b"as-req",
-            b"pk-as-rep",
+            &KdfInput {
+                shared_secret: &shared_secret,
+                kdf_oid: constants::ID_PKINIT_KDF_AH_SHA512,
+                enctype: 18,
+                party_u_info: b"client",
+                party_v_info: b"kdc",
+                as_req_der: b"as-req",
+                pa_pk_as_rep_der: b"pk-as-rep",
+            },
             &MockO2K,
         );
         assert!(result.is_ok());
@@ -298,24 +338,28 @@ mod tests {
         let secret1 = vec![0xAAu8; 32];
         let secret2 = vec![0xBBu8; 32];
         let key1 = pkinit_kdf(
-            &secret1,
-            constants::ID_PKINIT_KDF_AH_SHA256,
-            18,
-            b"c",
-            b"s",
-            b"req",
-            b"rep",
+            &KdfInput {
+                shared_secret: &secret1,
+                kdf_oid: constants::ID_PKINIT_KDF_AH_SHA256,
+                enctype: 18,
+                party_u_info: b"c",
+                party_v_info: b"s",
+                as_req_der: b"req",
+                pa_pk_as_rep_der: b"rep",
+            },
             &MockO2K,
         )
         .unwrap();
         let key2 = pkinit_kdf(
-            &secret2,
-            constants::ID_PKINIT_KDF_AH_SHA256,
-            18,
-            b"c",
-            b"s",
-            b"req",
-            b"rep",
+            &KdfInput {
+                shared_secret: &secret2,
+                kdf_oid: constants::ID_PKINIT_KDF_AH_SHA256,
+                enctype: 18,
+                party_u_info: b"c",
+                party_v_info: b"s",
+                as_req_der: b"req",
+                pa_pk_as_rep_der: b"rep",
+            },
             &MockO2K,
         )
         .unwrap();
@@ -338,5 +382,107 @@ mod tests {
         assert_eq!(key.key_data.len(), 32);
         assert_eq!(&key.key_data[..8], &[0x42u8; 8]);
         assert_eq!(&key.key_data[8..], &[0u8; 24]);
+    }
+
+    #[test]
+    fn kem_kdf_produces_output() {
+        let shared_secret = vec![0xABu8; 32];
+        let result = pkinit_kem_kdf(
+            &KemKdfInput {
+                shared_secret: &shared_secret,
+                enctype: 18,
+                as_req_der: b"mock-as-req",
+                kem_signed_data: b"mock-kem-signed-data",
+            },
+            &MockO2K,
+        );
+        assert!(result.is_ok());
+        let key = result.unwrap();
+        assert_eq!(key.enctype, 18);
+        assert_eq!(key.key_data.len(), 32);
+    }
+
+    #[test]
+    fn kem_kdf_aes128() {
+        let shared_secret = vec![0xCDu8; 32];
+        let key = pkinit_kem_kdf(
+            &KemKdfInput {
+                shared_secret: &shared_secret,
+                enctype: 17,
+                as_req_der: b"req",
+                kem_signed_data: b"signed",
+            },
+            &MockO2K,
+        )
+        .unwrap();
+        assert_eq!(key.enctype, 17);
+        assert_eq!(key.key_data.len(), 16);
+    }
+
+    #[test]
+    fn kem_kdf_different_secrets_produce_different_keys() {
+        let secret1 = vec![0xAAu8; 32];
+        let secret2 = vec![0xBBu8; 32];
+        let key1 = pkinit_kem_kdf(
+            &KemKdfInput {
+                shared_secret: &secret1,
+                enctype: 18,
+                as_req_der: b"req",
+                kem_signed_data: b"signed",
+            },
+            &MockO2K,
+        )
+        .unwrap();
+        let key2 = pkinit_kem_kdf(
+            &KemKdfInput {
+                shared_secret: &secret2,
+                enctype: 18,
+                as_req_der: b"req",
+                kem_signed_data: b"signed",
+            },
+            &MockO2K,
+        )
+        .unwrap();
+        assert_ne!(key1.key_data, key2.key_data);
+    }
+
+    #[test]
+    fn kem_kdf_different_context_produces_different_keys() {
+        let secret = vec![0xEEu8; 32];
+        let key1 = pkinit_kem_kdf(
+            &KemKdfInput {
+                shared_secret: &secret,
+                enctype: 18,
+                as_req_der: b"req-1",
+                kem_signed_data: b"signed",
+            },
+            &MockO2K,
+        )
+        .unwrap();
+        let key2 = pkinit_kem_kdf(
+            &KemKdfInput {
+                shared_secret: &secret,
+                enctype: 18,
+                as_req_der: b"req-2",
+                kem_signed_data: b"signed",
+            },
+            &MockO2K,
+        )
+        .unwrap();
+        assert_ne!(key1.key_data, key2.key_data);
+    }
+
+    #[test]
+    fn kem_kdf_deterministic() {
+        let secret = vec![0xFFu8; 32];
+        let input = KemKdfInput {
+            shared_secret: &secret,
+            enctype: 18,
+            as_req_der: b"stable-req",
+            kem_signed_data: b"stable-signed",
+        };
+        let key1 = pkinit_kem_kdf(&input, &MockO2K).unwrap();
+        let key2 = pkinit_kem_kdf(&input, &MockO2K).unwrap();
+        assert_eq!(key1.key_data, key2.key_data);
     }
 }
