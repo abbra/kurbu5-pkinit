@@ -44,7 +44,7 @@ impl ClpreauthModule for PkinitClient {
         _callbacks: &mut ClpreauthCallbacks<'_>,
         req: &EtypeInfoRequest<'_>,
     ) -> Result<(), Krb5Error> {
-        if self.state.as_ref().is_some_and(|s| s.has_dh_key()) {
+        if self.state.as_ref().is_some_and(|s| s.has_dh_key() || s.has_kem_key()) {
             return Ok(());
         }
 

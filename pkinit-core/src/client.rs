@@ -64,6 +64,10 @@ impl PkinitClientState {
         self.dh_key.is_some()
     }
 
+    pub fn has_kem_key(&self) -> bool {
+        self.kem_key.is_some()
+    }
+
     pub fn has_pq_certificate(&self) -> bool {
         !self.identity.cert_der.is_empty() && is_pq_signing_certificate(&self.identity.cert_der)
     }
