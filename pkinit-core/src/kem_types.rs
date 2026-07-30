@@ -105,7 +105,7 @@ impl PkinitKemSuppPubInfo {
 /// Context tag byte for `PA-PK-AS-REP.kemInfo [2] IMPLICIT KemRepInfo`.
 ///
 /// Context-specific, constructed, tag number 2 (KemRepInfo is a SEQUENCE).
-pub const PA_PK_AS_REP_KEM_TAG: u8 = 0xA2;
+pub(crate) const PA_PK_AS_REP_KEM_TAG: u8 = 0xA2;
 
 /// Check whether a DER-encoded PA-PK-AS-REP begins with the kemInfo [2] tag.
 pub fn is_kem_rep(pa_rep_der: &[u8]) -> bool {
@@ -116,7 +116,7 @@ pub fn is_kem_rep(pa_rep_der: &[u8]) -> bool {
 ///
 /// Parses the TLV, verifies the tag is `[2]`, and returns the value bytes
 /// (which are the DER-encoded KEMRepInfo).
-pub fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, crate::error::PkinitError> {
+pub(crate) fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, crate::error::PkinitError> {
     if !is_kem_rep(pa_rep_der) {
         return Err(crate::error::PkinitError::Asn1(
             "PA-PK-AS-REP: expected kemInfo [2] tag".into(),
@@ -134,7 +134,7 @@ pub fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, crate::error
 }
 
 /// Encode a KEMRepInfo as a `PA-PK-AS-REP.kemInfo [2] IMPLICIT OCTET STRING`.
-pub fn encode_kem_rep_wrapper(
+pub(crate) fn encode_kem_rep_wrapper(
     kem_rep_info: &KemRepInfo,
 ) -> Result<Vec<u8>, crate::error::PkinitError> {
     let inner_der = kem_rep_info
@@ -206,7 +206,7 @@ fn der_encode_length(len: usize, out: &mut Vec<u8>) {
 ///     ...
 /// }
 /// ```
-pub fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, crate::error::PkinitError> {
+pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, crate::error::PkinitError> {
     use synta::Encode;
 
     if algorithm_oids.is_empty() {
@@ -263,7 +263,7 @@ pub fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, crate::e
 ///
 /// Returns the list of algorithm OIDs found in the hint. If the hint is
 /// empty or has no `ephemeralKeyParameters`, returns an empty vec.
-pub fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, crate::error::PkinitError> {
+pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, crate::error::PkinitError> {
     // Outer SEQUENCE
     if hint_der.is_empty() || hint_der[0] != 0x30 {
         return Err(crate::error::PkinitError::Asn1(

@@ -17,12 +17,12 @@ unsafe extern "C" {
     ) -> kurbu5_sys::krb5_error_code;
 }
 
-pub struct Krb5OctetString2Key {
+pub(crate) struct Krb5OctetString2Key {
     ctx: kurbu5_sys::krb5_context,
 }
 
 impl Krb5OctetString2Key {
-    pub fn new(ctx: &kurbu5_rs::PluginContext<'_>) -> Self {
+    pub(crate) fn new(ctx: &kurbu5_rs::PluginContext<'_>) -> Self {
         Self { ctx: ctx.as_raw() }
     }
 }
