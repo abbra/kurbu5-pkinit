@@ -473,7 +473,7 @@ impl PkinitClientState {
                     return Ok(RetryAction::RetryWithKemAlgorithm(kem_alg));
                 }
 
-                if let Some(group) = parse_td_dh_parameters(data) {
+                if let Some(group) = parse_td_dh_parameters(data, self.config.dh_min_bits) {
                     if self.has_pq_certificate() {
                         return Err(PkinitError::DowngradeRejected(
                             "PQ client must not fall back to classical DH".into(),
@@ -517,13 +517,13 @@ fn parse_td_kem_algorithm(data: &[u8]) -> Option<KemAlgorithm> {
     None
 }
 
-fn parse_td_dh_parameters(data: &[u8]) -> Option<DhGroup> {
+fn parse_td_dh_parameters(data: &[u8], min_bits: u32) -> Option<DhGroup> {
     let td: synta_krb5::pkinit::TdDhParameters<'_> =
         synta_krb5::pkinit::TdDhParameters::from_der(data).ok()?;
 
     for elem in td.0.iter() {
         let elem_der = elem.to_der().ok()?;
-        if let Ok(group) = dh::validate_dh_params(&elem_der, 0) {
+        if let Ok(group) = dh::validate_dh_params(&elem_der, min_bits) {
             return Some(group);
         }
     }
