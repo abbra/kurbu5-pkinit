@@ -149,7 +149,13 @@ impl TrustStore {
         policy.ca_extension_policy = synta_x509_verification::ExtensionPolicy::new_permit_all();
         policy.ee_extension_policy = synta_x509_verification::ExtensionPolicy::new_permit_all();
 
-        let revocation = if require_crl && !self.crls.is_empty() {
+        if require_crl && self.crls.is_empty() {
+            return Err(PkinitError::ChainValidationFailed(
+                "CRL checking required but no CRLs loaded".into(),
+            ));
+        }
+
+        let revocation = if require_crl {
             let mut crl_store = CrlStore::new();
             for crl in &self.crls {
                 crl_store.add_der(crl.clone());
