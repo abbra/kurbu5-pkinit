@@ -273,6 +273,11 @@ pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, Pkinit
         ));
     }
     let (outer_len, outer_hdr) = der_parse_length(&hint_der[1..])?;
+    if hint_der.len() < 1 + outer_hdr + outer_len {
+        return Err(PkinitError::Asn1(
+            "PA-PK-AS-REQ-Hint: truncated outer SEQUENCE".into(),
+        ));
+    }
     let outer_content = &hint_der[1 + outer_hdr..1 + outer_hdr + outer_len];
 
     if outer_content.is_empty() {
@@ -284,6 +289,11 @@ pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, Pkinit
         return Ok(vec![]);
     }
     let (tag0_len, tag0_hdr) = der_parse_length(&outer_content[1..])?;
+    if outer_content.len() < 1 + tag0_hdr + tag0_len {
+        return Err(PkinitError::Asn1(
+            "PA-PK-AS-REQ-Hint: truncated [0] content".into(),
+        ));
+    }
     let tag0_content = &outer_content[1 + tag0_hdr..1 + tag0_hdr + tag0_len];
 
     // tag0_content is SEQUENCE OF AlgorithmIdentifier
