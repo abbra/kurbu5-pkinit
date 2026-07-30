@@ -224,6 +224,19 @@ impl PkinitKdc {
         req: &ReturnPadataRequest<'_>,
         callbacks: &KdcpreauthCallbacks<'_>,
     ) -> Result<Option<PaData>, Krb5Error> {
+        struct KeyblockGuard {
+            ptr: *mut kurbu5_sys::krb5_keyblock,
+            ctx: kurbu5_sys::krb5_context,
+        }
+
+        impl Drop for KeyblockGuard {
+            fn drop(&mut self) {
+                if !self.ptr.is_null() {
+                    unsafe { kurbu5_sys::krb5_free_keyblock(self.ctx, self.ptr) }
+                }
+            }
+        }
+
         let is_anonymous = callbacks
             .client_name_principal()
             .is_some_and(crate::principal::is_anonymous);
@@ -244,23 +257,29 @@ impl PkinitKdc {
             if ticket.enc_part2.is_null() {
                 return Err(Krb5Error::Custom(libc::EINVAL));
             }
-            let enc_tkt = &mut *ticket.enc_part2;
-            if enc_tkt.session.is_null() {
+            let enc_tkt_ptr = ticket.enc_part2;
+            let session_ptr = (*enc_tkt_ptr).session;
+            if session_ptr.is_null() || (*session_ptr).contents.is_null() {
                 return Err(Krb5Error::Custom(libc::EINVAL));
             }
-            let session = &*enc_tkt.session;
 
-            let new_session = kurbu5_rs::crypto::fx_cf2_simple(
-                ctx,
-                session as *const _,
-                c"PKINIT",
-                req.encrypting_key as *const _,
-                c"KEYEXCHANGE",
-            )?;
+            let session_enctype = (*session_ptr).enctype;
+            let session_length = (*session_ptr).length as usize;
+            let key_data = std::slice::from_raw_parts((*session_ptr).contents, session_length);
 
-            let key_data = std::slice::from_raw_parts(session.contents, session.length as usize);
+            let new_session_guard = KeyblockGuard {
+                ptr: kurbu5_rs::crypto::fx_cf2_simple(
+                    ctx,
+                    session_ptr as *const _,
+                    c"PKINIT",
+                    req.encrypting_key as *const _,
+                    c"KEYEXCHANGE",
+                )?,
+                ctx: ctx.as_raw(),
+            };
+
             let enc_key = synta_krb5::kerberos_v5::EncryptionKey {
-                keytype: synta_krb5::kerberos_v5::Int32::new_unchecked(session.enctype),
+                keytype: synta_krb5::kerberos_v5::Int32::new_unchecked(session_enctype),
                 keyvalue: OctetString::new(key_data.to_vec()),
             };
             let key_der = enc_key
@@ -283,23 +302,20 @@ impl PkinitKdc {
                 .to_der()
                 .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
 
-            let ns = &*new_session;
-            let session_mut = &mut *enc_tkt.session;
+            let ns = &*new_session_guard.ptr;
+            let session_mut = &mut *session_ptr;
             if !session_mut.contents.is_null() && session_mut.length > 0 {
                 std::ptr::write_bytes(session_mut.contents, 0, session_mut.length as usize);
             }
-            kurbu5_sys::krb5_free_keyblock_contents(ctx.as_raw(), enc_tkt.session);
+            kurbu5_sys::krb5_free_keyblock_contents(ctx.as_raw(), session_ptr);
             session_mut.enctype = ns.enctype;
             session_mut.length = ns.length;
             let new_contents = libc::malloc(ns.length as usize) as *mut u8;
             if new_contents.is_null() {
-                kurbu5_sys::krb5_free_keyblock(ctx.as_raw(), new_session);
                 return Err(Krb5Error::Custom(libc::ENOMEM));
             }
             std::ptr::copy_nonoverlapping(ns.contents, new_contents, ns.length as usize);
             session_mut.contents = new_contents;
-
-            kurbu5_sys::krb5_free_keyblock(ctx.as_raw(), new_session);
 
             Ok(Some(PaData::new(PA_PKINIT_KX, enc_data_der)))
         }
