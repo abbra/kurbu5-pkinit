@@ -1,3 +1,4 @@
 /target
 .claude/
 docs/superpowers/
+__pycache__

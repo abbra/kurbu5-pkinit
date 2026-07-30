@@ -71,12 +71,11 @@ pub fn extract_upn_sans(cert_der: &[u8]) -> Result<Vec<String>, PkinitError> {
 
     let mut result = Vec::new();
     for gn in &sans {
-        if let GeneralName::OtherName(on) = gn {
-            if on.type_id == ms_upn_oid {
-                if let Element::Utf8String(utf8) = &on.value {
-                    result.push(utf8.as_str().to_string());
-                }
-            }
+        if let GeneralName::OtherName(on) = gn
+            && on.type_id == ms_upn_oid
+            && let Element::Utf8String(utf8) = &on.value
+        {
+            result.push(utf8.as_str().to_string());
         }
     }
     Ok(result)

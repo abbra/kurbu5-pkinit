@@ -120,7 +120,7 @@ pub fn validate_dh_params(spki_der: &[u8], min_bits: u32) -> Result<DhGroup, Pki
 }
 
 fn identify_oakley_group(p_bytes: &[u8], bits: u32) -> Result<DhGroup, PkinitError> {
-    if bits >= 2048 && bits < 4096 && p_bytes == OAKLEY_2048_PRIME {
+    if (2048..4096).contains(&bits) && p_bytes == OAKLEY_2048_PRIME {
         Ok(DhGroup::Oakley2048)
     } else if bits >= 4096 && p_bytes == OAKLEY_4096_PRIME {
         Ok(DhGroup::Oakley4096)
@@ -364,6 +364,96 @@ mod tests {
         let secret_b = bob.derive_shared_secret(&alice_pub).unwrap();
 
         assert_eq!(secret_a, secret_b);
+    }
+
+    #[test]
+    fn generate_ec_p384_keypair() {
+        let kp = DhKeyPair::generate(DhGroup::EcP384).unwrap();
+        assert_eq!(kp.group(), DhGroup::EcP384);
+    }
+
+    #[test]
+    fn generate_ec_p521_keypair() {
+        let kp = DhKeyPair::generate(DhGroup::EcP521).unwrap();
+        assert_eq!(kp.group(), DhGroup::EcP521);
+    }
+
+    #[test]
+    fn generate_oakley4096_keypair() {
+        let kp = DhKeyPair::generate(DhGroup::Oakley4096).unwrap();
+        assert_eq!(kp.group(), DhGroup::Oakley4096);
+    }
+
+    #[test]
+    fn spki_round_trip_ec_p384() {
+        let kp = DhKeyPair::generate(DhGroup::EcP384).unwrap();
+        let spki = kp.public_key_spki_der().unwrap();
+        assert!(!spki.is_empty());
+        let group = validate_dh_params(&spki, 0).unwrap();
+        assert_eq!(group, DhGroup::EcP384);
+    }
+
+    #[test]
+    fn spki_round_trip_ec_p521() {
+        let kp = DhKeyPair::generate(DhGroup::EcP521).unwrap();
+        let spki = kp.public_key_spki_der().unwrap();
+        assert!(!spki.is_empty());
+        let group = validate_dh_params(&spki, 0).unwrap();
+        assert_eq!(group, DhGroup::EcP521);
+    }
+
+    #[test]
+    fn spki_round_trip_oakley4096() {
+        let kp = DhKeyPair::generate(DhGroup::Oakley4096).unwrap();
+        let spki = kp.public_key_spki_der().unwrap();
+        assert!(!spki.is_empty());
+        let group = validate_dh_params(&spki, 4096).unwrap();
+        assert_eq!(group, DhGroup::Oakley4096);
+    }
+
+    #[test]
+    fn shared_secret_consistency_ec_p384() {
+        let alice = DhKeyPair::generate(DhGroup::EcP384).unwrap();
+        let bob = DhKeyPair::generate(DhGroup::EcP384).unwrap();
+
+        let alice_pub = alice.public_key_spki_der().unwrap();
+        let bob_pub = bob.public_key_spki_der().unwrap();
+
+        let secret_a = alice.derive_shared_secret(&bob_pub).unwrap();
+        let secret_b = bob.derive_shared_secret(&alice_pub).unwrap();
+
+        assert_eq!(secret_a, secret_b);
+        assert!(!secret_a.is_empty());
+    }
+
+    #[test]
+    fn shared_secret_consistency_ec_p521() {
+        let alice = DhKeyPair::generate(DhGroup::EcP521).unwrap();
+        let bob = DhKeyPair::generate(DhGroup::EcP521).unwrap();
+
+        let alice_pub = alice.public_key_spki_der().unwrap();
+        let bob_pub = bob.public_key_spki_der().unwrap();
+
+        let secret_a = alice.derive_shared_secret(&bob_pub).unwrap();
+        let secret_b = bob.derive_shared_secret(&alice_pub).unwrap();
+
+        assert_eq!(secret_a, secret_b);
+        assert!(!secret_a.is_empty());
+    }
+
+    #[test]
+    fn shared_secret_consistency_oakley4096() {
+        let alice = DhKeyPair::generate(DhGroup::Oakley4096).unwrap();
+        let bob = DhKeyPair::generate(DhGroup::Oakley4096).unwrap();
+
+        let alice_pub = alice.public_key_spki_der().unwrap();
+        let bob_pub = bob.public_key_spki_der().unwrap();
+
+        let secret_a = alice.derive_shared_secret(&bob_pub).unwrap();
+        let secret_b = bob.derive_shared_secret(&alice_pub).unwrap();
+
+        assert_eq!(secret_a, secret_b);
+        assert!(!secret_a.is_empty());
     }
 
     #[test]

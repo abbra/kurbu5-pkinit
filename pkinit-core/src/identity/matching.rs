@@ -192,7 +192,7 @@ fn simple_match(haystack: &str, pattern: &str) -> bool {
             return false;
         }
     }
-    if !parts.last().map_or(true, |p| p.is_empty()) {
+    if !parts.last().is_none_or(|p| p.is_empty()) {
         pos == haystack.len()
     } else {
         true
