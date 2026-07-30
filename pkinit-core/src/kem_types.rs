@@ -176,7 +176,7 @@ fn der_parse_length(data: &[u8]) -> Result<(usize, usize), PkinitError> {
     }
 }
 
-fn der_encode_length(len: usize, out: &mut Vec<u8>) {
+pub(crate) fn der_encode_length(len: usize, out: &mut Vec<u8>) {
     if len < 0x80 {
         out.push(len as u8);
     } else if len <= 0xFF {

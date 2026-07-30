@@ -514,33 +514,9 @@ fn verify_message_digest(
 fn retag_as_set(content: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(2 + content.len());
     result.push(0x31); // SET tag
-    encode_der_length(&mut result, content.len());
+    crate::kem_types::der_encode_length(content.len(), &mut result);
     result.extend_from_slice(content);
     result
-}
-
-fn encode_der_length(buf: &mut Vec<u8>, len: usize) {
-    if len < 0x80 {
-        buf.push(len as u8);
-    } else if len < 0x100 {
-        buf.push(0x81);
-        buf.push(len as u8);
-    } else if len < 0x10000 {
-        buf.push(0x82);
-        buf.push((len >> 8) as u8);
-        buf.push(len as u8);
-    } else if len < 0x100_0000 {
-        buf.push(0x83);
-        buf.push((len >> 16) as u8);
-        buf.push((len >> 8) as u8);
-        buf.push(len as u8);
-    } else {
-        buf.push(0x84);
-        buf.push((len >> 24) as u8);
-        buf.push((len >> 16) as u8);
-        buf.push((len >> 8) as u8);
-        buf.push(len as u8);
-    }
 }
 
 #[cfg(test)]
