@@ -22,6 +22,7 @@ pub struct AsRepParams<'a> {
 
 pub enum RetryAction {
     RetryWithDhParams(DhGroup),
+    RetryWithKemAlgorithm(KemAlgorithm),
     RetryWithCerts,
     NoRetry,
 }
@@ -462,11 +463,29 @@ impl PkinitClientState {
         for pa in &padata_list {
             let pa_type = pa.padata_type.get();
 
-            if pa_type == synta_krb5::constants::TD_DH_PARAMETERS
-                && let Some(group) = parse_td_dh_parameters(pa.padata_value.as_bytes())
-            {
-                self.dh_key = None;
-                return Ok(RetryAction::RetryWithDhParams(group));
+            if pa_type == synta_krb5::constants::TD_DH_PARAMETERS {
+                let data = pa.padata_value.as_bytes();
+
+                if let Some(kem_alg) = parse_td_kem_algorithm(data) {
+                    self.kem_key = None;
+                    self.config.kem_algorithm = Some(kem_alg);
+                    return Ok(RetryAction::RetryWithKemAlgorithm(kem_alg));
+                }
+
+                if let Some(group) = parse_td_dh_parameters(data) {
+                    if self.has_pq_certificate() {
+                        return Err(PkinitError::DowngradeRejected(
+                            "PQ client must not fall back to classical DH".into(),
+                        ));
+                    }
+                    self.dh_key = None;
+                    self.config.kem_algorithm = None;
+                    return Ok(RetryAction::RetryWithDhParams(group));
+                }
+
+                return Err(PkinitError::KemAlgorithmNotSupported(
+                    "no mutually acceptable key exchange parameters".into(),
+                ));
             }
 
             if pa_type == synta_krb5::constants::TD_TRUSTED_CERTIFIERS
@@ -478,6 +497,23 @@ impl PkinitClientState {
 
         Ok(RetryAction::NoRetry)
     }
+}
+
+fn parse_td_kem_algorithm(data: &[u8]) -> Option<KemAlgorithm> {
+    let td: synta_krb5::pkinit::TdDhParameters<'_> =
+        synta_krb5::pkinit::TdDhParameters::from_der(data).ok()?;
+
+    for elem in td.0.iter() {
+        let elem_der = elem.to_der().ok()?;
+        let alg_id: synta_certificate::AlgorithmIdentifier<'_> =
+            synta::Decoder::new(&elem_der, synta::Encoding::Der)
+                .decode()
+                .ok()?;
+        if let Some(kem_alg) = KemAlgorithm::from_oid(alg_id.algorithm.components()) {
+            return Some(kem_alg);
+        }
+    }
+    None
 }
 
 fn parse_td_dh_parameters(data: &[u8]) -> Option<DhGroup> {
