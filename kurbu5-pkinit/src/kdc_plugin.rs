@@ -13,6 +13,7 @@ use pkinit_core::server::{PkinitKdcState, VerifiedRequest};
 
 use crate::o2k::Krb5OctetString2Key;
 use crate::profile;
+use crate::trace::pkinit_trace;
 
 pub struct PkinitKdc {
     state: PkinitKdcState,
@@ -33,6 +34,7 @@ impl KdcpreauthModule for PkinitKdc {
 
     fn init_module(ctx: &PluginContext<'_>, realmnames: &[&str]) -> Result<Self, Krb5Error> {
         let realm = realmnames.first().ok_or(Krb5Error::Custom(libc::EINVAL))?;
+        pkinit_trace!(ctx, "PKINIT server initializing realm {}", realm);
         let profile = kurbu5_rs::Profile::from_context(ctx)?;
         let config = profile::read_kdc_config(&profile, realm);
 
@@ -40,11 +42,20 @@ impl KdcpreauthModule for PkinitKdc {
 
         let source =
             IdentitySource::parse(identity_str).map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
-        let identity =
-            PkinitIdentity::load(&source).map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
+        let identity = PkinitIdentity::load(&source).map_err(|e| {
+            pkinit_trace!(
+                ctx,
+                "PKINIT server initialization failed for realm {}: {}",
+                realm,
+                e
+            );
+            Krb5Error::Custom(libc::EINVAL)
+        })?;
+        pkinit_trace!(ctx, "PKINIT loaded cert and key for KDC");
 
         let mut trust_store = TrustStore::new();
         for anchor in &config.anchors {
+            pkinit_trace!(ctx, "PKINIT loading CA certs and CRLs from {}", anchor);
             trust_store
                 .load_from_path(anchor)
                 .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
@@ -64,7 +75,7 @@ impl KdcpreauthModule for PkinitKdc {
 
     fn get_edata(
         &self,
-        _ctx: &PluginContext<'_>,
+        ctx: &PluginContext<'_>,
         _pa_type: i32,
         callbacks: &KdcpreauthCallbacks<'_>,
         respond: Box<dyn FnOnce(Result<Option<PaData>, Krb5Error>)>,
@@ -77,18 +88,25 @@ impl KdcpreauthModule for PkinitKdc {
         }
 
         match self.state.build_supported_algorithms_hint() {
-            Ok(hint_der) => respond(Ok(Some(PaData::new(16, hint_der)))),
+            Ok(hint_der) => {
+                pkinit_trace!(
+                    ctx,
+                    "PKINIT server advertising supported algorithms in hint"
+                );
+                respond(Ok(Some(PaData::new(16, hint_der))));
+            }
             Err(_) => respond(Ok(None)),
         }
     }
 
     fn verify(
         &self,
-        _ctx: &PluginContext<'_>,
+        ctx: &PluginContext<'_>,
         pa_data: &PaData,
         callbacks: &KdcpreauthCallbacks<'_>,
         respond: Box<dyn FnOnce(VerifyResponse)>,
     ) {
+        pkinit_trace!(ctx, "PKINIT server verifying KRB5_PADATA_PK_AS_REQ");
         let pa_contents = &pa_data.contents;
         if pa_contents.is_empty() {
             respond(VerifyResponse::err(libc::EINVAL));
@@ -108,6 +126,7 @@ impl KdcpreauthModule for PkinitKdc {
             {
                 Ok(v) => v,
                 Err(_) => {
+                    pkinit_trace!(ctx, "PKINIT server failed to verify PA data");
                     respond(VerifyResponse::err(libc::EINVAL));
                     return;
                 }
@@ -145,6 +164,7 @@ impl PkinitKdc {
         req: &ReturnPadataRequest<'_>,
         callbacks: &KdcpreauthCallbacks<'_>,
     ) -> Result<Option<PaData>, Krb5Error> {
+        pkinit_trace!(ctx, "PKINIT server returning PA data");
         let modreq = req
             .modreq
             .and_then(|m| m.downcast_ref::<PkinitModReq>())
