@@ -1,6 +1,8 @@
 use synta::{Integer, OctetString};
 use synta_certificate::AlgorithmIdentifier;
 
+use crate::error::PkinitError;
+
 /// KEMRepInfo carries the KDC's KEM response.
 ///
 /// ```asn1
@@ -116,9 +118,9 @@ pub fn is_kem_rep(pa_rep_der: &[u8]) -> bool {
 ///
 /// Parses the TLV, verifies the tag is `[2]`, and returns the value bytes
 /// (which are the DER-encoded KEMRepInfo).
-pub(crate) fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, crate::error::PkinitError> {
+pub(crate) fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, PkinitError> {
     if !is_kem_rep(pa_rep_der) {
-        return Err(crate::error::PkinitError::Asn1(
+        return Err(PkinitError::Asn1(
             "PA-PK-AS-REP: expected kemInfo [2] tag".into(),
         ));
     }
@@ -126,7 +128,7 @@ pub(crate) fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, crate
     let (len, header_size) = der_parse_length(&pa_rep_der[1..])?;
     let value_start = 1 + header_size;
     if pa_rep_der.len() < value_start + len {
-        return Err(crate::error::PkinitError::Asn1(
+        return Err(PkinitError::Asn1(
             "kemInfo: truncated content".into(),
         ));
     }
@@ -136,10 +138,10 @@ pub(crate) fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, crate
 /// Encode a KEMRepInfo as a `PA-PK-AS-REP.kemInfo [2] IMPLICIT OCTET STRING`.
 pub(crate) fn encode_kem_rep_wrapper(
     kem_rep_info: &KemRepInfo,
-) -> Result<Vec<u8>, crate::error::PkinitError> {
+) -> Result<Vec<u8>, PkinitError> {
     let inner_der = kem_rep_info
         .to_der()
-        .map_err(|e| crate::error::PkinitError::Asn1(format!("encode KEMRepInfo: {e}")))?;
+        .map_err(|e| PkinitError::Asn1(format!("encode KEMRepInfo: {e}")))?;
     let mut out = Vec::with_capacity(1 + 4 + inner_der.len());
     out.push(PA_PK_AS_REP_KEM_TAG);
     der_encode_length(inner_der.len(), &mut out);
@@ -147,9 +149,9 @@ pub(crate) fn encode_kem_rep_wrapper(
     Ok(out)
 }
 
-fn der_parse_length(data: &[u8]) -> Result<(usize, usize), crate::error::PkinitError> {
+fn der_parse_length(data: &[u8]) -> Result<(usize, usize), PkinitError> {
     if data.is_empty() {
-        return Err(crate::error::PkinitError::Asn1(
+        return Err(PkinitError::Asn1(
             "DER length: unexpected end".into(),
         ));
     }
@@ -159,7 +161,7 @@ fn der_parse_length(data: &[u8]) -> Result<(usize, usize), crate::error::PkinitE
     } else {
         let n = (first & 0x7F) as usize;
         if n == 0 || n > 4 || data.len() < 1 + n {
-            return Err(crate::error::PkinitError::Asn1(
+            return Err(PkinitError::Asn1(
                 "DER length: invalid long form".into(),
             ));
         }
@@ -168,7 +170,7 @@ fn der_parse_length(data: &[u8]) -> Result<(usize, usize), crate::error::PkinitE
             len = len
                 .checked_shl(8)
                 .and_then(|l| l.checked_add(b as usize))
-                .ok_or_else(|| crate::error::PkinitError::Asn1("DER length: overflow".into()))?;
+                .ok_or_else(|| PkinitError::Asn1("DER length: overflow".into()))?;
         }
         Ok((len, 1 + n))
     }
@@ -206,7 +208,7 @@ fn der_encode_length(len: usize, out: &mut Vec<u8>) {
 ///     ...
 /// }
 /// ```
-pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, crate::error::PkinitError> {
+pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, PkinitError> {
     use synta::Encode;
 
     if algorithm_oids.is_empty() {
@@ -214,17 +216,17 @@ pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, c
         let empty_seq: Vec<AlgorithmIdentifier<'_>> = vec![];
         empty_seq
             .encode(&mut encoder)
-            .map_err(|e| crate::error::PkinitError::Asn1(format!("encode hint: {e}")))?;
+            .map_err(|e| PkinitError::Asn1(format!("encode hint: {e}")))?;
         return encoder
             .finish()
-            .map_err(|e| crate::error::PkinitError::Asn1(format!("finish hint: {e}")));
+            .map_err(|e| PkinitError::Asn1(format!("finish hint: {e}")));
     }
 
     let oids: Vec<synta::ObjectIdentifier> = algorithm_oids
         .iter()
         .map(|oid| {
             synta::ObjectIdentifier::new(oid)
-                .map_err(|e| crate::error::PkinitError::Asn1(format!("OID: {e}")))
+                .map_err(|e| PkinitError::Asn1(format!("OID: {e}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -239,10 +241,10 @@ pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, c
     let mut inner_encoder = synta::Encoder::new(synta::Encoding::Der);
     alg_ids
         .encode(&mut inner_encoder)
-        .map_err(|e| crate::error::PkinitError::Asn1(format!("encode alg ids: {e}")))?;
+        .map_err(|e| PkinitError::Asn1(format!("encode alg ids: {e}")))?;
     let seq_of_der = inner_encoder
         .finish()
-        .map_err(|e| crate::error::PkinitError::Asn1(format!("finish alg ids: {e}")))?;
+        .map_err(|e| PkinitError::Asn1(format!("finish alg ids: {e}")))?;
 
     // Wrap in [0] EXPLICIT tag
     let mut tagged = Vec::with_capacity(1 + 4 + seq_of_der.len());
@@ -263,10 +265,10 @@ pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, c
 ///
 /// Returns the list of algorithm OIDs found in the hint. If the hint is
 /// empty or has no `ephemeralKeyParameters`, returns an empty vec.
-pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, crate::error::PkinitError> {
+pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, PkinitError> {
     // Outer SEQUENCE
     if hint_der.is_empty() || hint_der[0] != 0x30 {
-        return Err(crate::error::PkinitError::Asn1(
+        return Err(PkinitError::Asn1(
             "PA-PK-AS-REQ-Hint: expected SEQUENCE".into(),
         ));
     }
@@ -289,7 +291,7 @@ pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, crate:
         synta::Decoder::new(tag0_content, synta::Encoding::Der)
             .decode()
             .map_err(|e| {
-                crate::error::PkinitError::Asn1(format!("decode ephemeralKeyParameters: {e}"))
+                PkinitError::Asn1(format!("decode ephemeralKeyParameters: {e}"))
             })?;
 
     Ok(alg_ids
