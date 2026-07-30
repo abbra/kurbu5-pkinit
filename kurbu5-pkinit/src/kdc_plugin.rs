@@ -125,8 +125,8 @@ impl KdcpreauthModule for PkinitKdc {
                 .verify_as_req(pa_contents, None, max_skew, current_time, None)
             {
                 Ok(v) => v,
-                Err(_) => {
-                    pkinit_trace!(ctx, "PKINIT server failed to verify PA data");
+                Err(e) => {
+                    pkinit_trace!(ctx, "PKINIT server failed to verify PA data: {}", e);
                     respond(VerifyResponse::err(libc::EINVAL));
                     return;
                 }
