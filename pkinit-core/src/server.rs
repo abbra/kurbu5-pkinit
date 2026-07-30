@@ -205,15 +205,72 @@ impl PkinitKdcState {
 
     fn build_kem_rep(
         &self,
-        _verified: &VerifiedRequest,
-        _params: &BuildAsRepParams<'_>,
-        _o2k: &dyn OctetString2Key,
+        verified: &VerifiedRequest,
+        params: &BuildAsRepParams<'_>,
+        o2k: &dyn OctetString2Key,
         kem_alg: KemAlgorithm,
     ) -> Result<(Vec<u8>, DerivedKey), PkinitError> {
-        Err(PkinitError::Unsupported(format!(
-            "KEM reply not yet implemented for {}",
-            kem_alg.parameter_set_name()
-        )))
+        use crate::crypto::kem;
+        use crate::kem_types::{KdcKemInfo, KemRepInfo, encode_kem_rep_wrapper};
+        use synta::OctetString;
+
+        let (kemct, shared_secret) =
+            kem::encapsulate_for_client(&verified.client_dh_public, kem_alg)?;
+
+        let kem_oid = synta::ObjectIdentifier::new(kem_alg.oid())
+            .map_err(|e| PkinitError::Asn1(format!("KEM OID: {e}")))?;
+        let kdf_oid = synta::ObjectIdentifier::new(crate::constants::ID_ALG_HKDF_WITH_SHA512)
+            .map_err(|e| PkinitError::Asn1(format!("KDF OID: {e}")))?;
+
+        let kdc_kem_info = KdcKemInfo {
+            kem_algorithm: synta_certificate::AlgorithmIdentifier {
+                algorithm: kem_oid,
+                parameters: None,
+            },
+            kemct: OctetString::new(kemct),
+            kdf_algorithm: synta_certificate::AlgorithmIdentifier {
+                algorithm: kdf_oid,
+                parameters: None,
+            },
+            nonce: Some(synta::Integer::from(params.nonce)),
+            server_nonce: None,
+        };
+
+        let kdc_kem_info_der = kdc_kem_info
+            .to_der()
+            .map_err(|e| PkinitError::Asn1(format!("encode KDCKEMInfo: {e}")))?;
+
+        let signer_key = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+            self.identity.key_pkcs8_der.clone(),
+        );
+        let extra_certs: Vec<&[u8]> = self.identity.chain.iter().map(|c| c.as_slice()).collect();
+
+        let kem_signed_data = cms::create_signed_data(
+            &kdc_kem_info_der,
+            crate::constants::ID_PKINIT_KEM_KEY_DATA,
+            &signer_key,
+            &self.identity.cert_der,
+            &extra_certs,
+            "sha256",
+        )?;
+
+        let kem_rep_info = KemRepInfo {
+            kem_signed_data: OctetString::new(kem_signed_data.clone()),
+        };
+
+        let pa_rep_der = encode_kem_rep_wrapper(&kem_rep_info)?;
+
+        let derived_key = kdf::pkinit_kem_kdf(
+            &kdf::KemKdfInput {
+                shared_secret: &shared_secret,
+                enctype: params.enctype,
+                as_req_der: params.as_req_der,
+                kem_signed_data: &kem_signed_data,
+            },
+            o2k,
+        )?;
+
+        Ok((pa_rep_der, derived_key))
     }
 
     fn build_dh_rep(
