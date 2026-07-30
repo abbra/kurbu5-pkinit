@@ -68,6 +68,24 @@ pub enum PkinitError {
     #[error("configuration error: {0}")]
     Config(String),
 
+    #[error("KEM encapsulation failed: {0}")]
+    KemEncapFailed(String),
+
+    #[error("KEM decapsulation failed: {0}")]
+    KemDecapFailed(String),
+
+    #[error("KEM algorithm mismatch: expected {expected}, got {actual}")]
+    KemAlgorithmMismatch { expected: String, actual: String },
+
+    #[error("KEM ciphertext length invalid: expected {expected}, got {actual}")]
+    KemCiphertextLengthInvalid { expected: usize, actual: usize },
+
+    #[error("KEM algorithm not supported: {0}")]
+    KemAlgorithmNotSupported(String),
+
+    #[error("downgrade rejected: {0}")]
+    DowngradeRejected(String),
+
     #[error("unsupported operation: {0}")]
     Unsupported(String),
 }
