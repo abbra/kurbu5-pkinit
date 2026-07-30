@@ -78,6 +78,31 @@ impl KemAlgorithm {
             None
         }
     }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "ml-kem-512" | "mlkem512" => Some(Self::MlKem512),
+            "ml-kem-768" | "mlkem768" => Some(Self::MlKem768),
+            "ml-kem-1024" | "mlkem1024" => Some(Self::MlKem1024),
+            _ => None,
+        }
+    }
+
+    pub fn strength_order(self) -> u8 {
+        match self {
+            Self::MlKem512 => 1,
+            Self::MlKem768 => 3,
+            Self::MlKem1024 => 5,
+        }
+    }
+
+    pub fn algorithms_at_or_above(self) -> Vec<Self> {
+        let min = self.strength_order();
+        [Self::MlKem512, Self::MlKem768, Self::MlKem1024]
+            .into_iter()
+            .filter(|a| a.strength_order() >= min)
+            .collect()
+    }
 }
 
 // Re-export PKINIT OIDs from synta-krb5 generated code
@@ -197,5 +222,59 @@ mod tests {
         assert_eq!(ID_MLKEM768_ECDH_P256, &[1, 3, 6, 1, 5, 5, 7, 6, 59]);
         assert_eq!(ID_MLKEM768_X25519, &[1, 3, 6, 1, 5, 5, 7, 6, 58]);
         assert_eq!(ID_MLKEM1024_ECDH_P384, &[1, 3, 6, 1, 5, 5, 7, 6, 63]);
+    }
+
+    #[test]
+    fn kem_algorithm_from_name_roundtrip() {
+        for alg in [
+            KemAlgorithm::MlKem512,
+            KemAlgorithm::MlKem768,
+            KemAlgorithm::MlKem1024,
+        ] {
+            assert_eq!(KemAlgorithm::from_name(alg.parameter_set_name()), Some(alg));
+        }
+    }
+
+    #[test]
+    fn kem_algorithm_from_name_case_insensitive() {
+        assert_eq!(
+            KemAlgorithm::from_name("mlkem512"),
+            Some(KemAlgorithm::MlKem512)
+        );
+        assert_eq!(
+            KemAlgorithm::from_name("MLKEM768"),
+            Some(KemAlgorithm::MlKem768)
+        );
+        assert_eq!(
+            KemAlgorithm::from_name("Ml-Kem-1024"),
+            Some(KemAlgorithm::MlKem1024)
+        );
+        assert_eq!(KemAlgorithm::from_name("unknown"), None);
+    }
+
+    #[test]
+    fn kem_algorithm_strength_order() {
+        assert!(KemAlgorithm::MlKem512.strength_order() < KemAlgorithm::MlKem768.strength_order());
+        assert!(KemAlgorithm::MlKem768.strength_order() < KemAlgorithm::MlKem1024.strength_order());
+    }
+
+    #[test]
+    fn kem_algorithms_at_or_above() {
+        assert_eq!(
+            KemAlgorithm::MlKem512.algorithms_at_or_above(),
+            vec![
+                KemAlgorithm::MlKem512,
+                KemAlgorithm::MlKem768,
+                KemAlgorithm::MlKem1024
+            ]
+        );
+        assert_eq!(
+            KemAlgorithm::MlKem768.algorithms_at_or_above(),
+            vec![KemAlgorithm::MlKem768, KemAlgorithm::MlKem1024]
+        );
+        assert_eq!(
+            KemAlgorithm::MlKem1024.algorithms_at_or_above(),
+            vec![KemAlgorithm::MlKem1024]
+        );
     }
 }
