@@ -24,6 +24,8 @@ PRINCIPAL="${PRINCIPAL:-user}"
 MIT_PKINIT_SO="${MIT_PKINIT_SO:-/usr/lib64/krb5/plugins/preauth/pkinit.so}"
 
 COMBO_ARG="all"
+KEY_TYPE="ec:P-256"
+PQC_MIN_ALGORITHM=""
 TOTAL_PASS=0
 TOTAL_FAIL=0
 TOTAL_SKIP=0
@@ -33,6 +35,8 @@ TOTAL_SKIP=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --combo) COMBO_ARG="$2"; shift 2 ;;
+        --key-type) KEY_TYPE="$2"; shift 2 ;;
+        --pqc-min-algorithm) PQC_MIN_ALGORITHM="$2"; shift 2 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -102,7 +106,13 @@ run_combo() {
     local FAIL_BEFORE=$TOTAL_FAIL
 
     echo
-    echo "=== Combo: $combo (KDC=$(basename "$kdc_so"), Client=$(basename "$client_so")) ==="
+    echo "=== Combo: $combo (KDC=$(basename "$kdc_so"), Client=$(basename "$client_so"), KeyType=$KEY_TYPE${PQC_MIN_ALGORITHM:+, PQC=$PQC_MIN_ALGORITHM}) ==="
+
+    # Build optional PQ args
+    local pqc_args=()
+    if [[ -n "$PQC_MIN_ALGORITHM" ]]; then
+        pqc_args+=(--pqc-min-algorithm "$PQC_MIN_ALGORITHM")
+    fi
 
     # Start ephemeral KDC
     python3 "$SCRIPT_DIR/setup.py" \
@@ -112,6 +122,8 @@ run_combo() {
         --principal "$PRINCIPAL" \
         --kdc-plugin-so "$kdc_so" \
         --client-plugin-so "$client_so" \
+        --key-type "$KEY_TYPE" \
+        "${pqc_args[@]}" \
         --env-file "$ENV_FILE" &
     SETUP_PID=$!
 

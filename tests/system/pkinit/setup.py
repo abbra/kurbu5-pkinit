@@ -44,11 +44,12 @@ SUPPORTED_KEY_TYPES = {
 class PkinitRealm:
     def __init__(self, testdir=None, realm=REALM, portbase=PORTBASE,
                  kdc_plugin_so=None, client_plugin_so=None, principal="user",
-                 key_type="ec:P-256"):
+                 key_type="ec:P-256", pqc_min_algorithm=None):
         self.realm = realm
         self.portbase = portbase
         self.principal = principal
         self.key_type = key_type
+        self.pqc_min_algorithm = pqc_min_algorithm
         if key_type not in SUPPORTED_KEY_TYPES:
             raise ValueError(
                 f"Unsupported key type: {key_type}. "
@@ -243,6 +244,9 @@ class PkinitRealm:
 
     def _write_configs(self):
         db_module_dir = self._find_db_module_dir()
+        pqc_line = ""
+        if self.pqc_min_algorithm:
+            pqc_line = f"\n                    pkinit_pqc_min_algorithm = {self.pqc_min_algorithm}"
 
         krb5 = textwrap.dedent(f"""\
             [libdefaults]
@@ -256,7 +260,7 @@ class PkinitRealm:
                     kdc = 127.0.0.1:{self.portbase}
                     admin_server = 127.0.0.1:{self.portbase + 1}
                     pkinit_anchors = FILE:{self.ca_cert}
-                    pkinit_identities = FILE:{self.client_cert},{self.client_key}
+                    pkinit_identities = FILE:{self.client_cert},{self.client_key}{pqc_line}
                 }}
 
             [domain_realm]
@@ -300,7 +304,7 @@ class PkinitRealm:
                     pkinit_identity = FILE:{self.kdc_cert},{self.kdc_key}
                     pkinit_anchors = FILE:{self.ca_cert}
                     default_principal_flags = +preauth
-                    pkinit_eku_checking = none
+                    pkinit_eku_checking = none{pqc_line}
                 }}
 
             [logging]
@@ -419,6 +423,8 @@ def main():
     parser.add_argument("--key-type", default="ec:P-256",
                         choices=sorted(SUPPORTED_KEY_TYPES),
                         help="Certificate key type (default: ec:P-256)")
+    parser.add_argument("--pqc-min-algorithm", default=None,
+                        help="Minimum PQ algorithm (e.g. ML-KEM-768)")
     args = parser.parse_args()
 
     kdc_so = args.kdc_plugin_so or args.plugin_so
@@ -434,6 +440,7 @@ def main():
         client_plugin_so=client_so,
         principal=args.principal,
         key_type=args.key_type,
+        pqc_min_algorithm=args.pqc_min_algorithm,
     )
     realm.start()
 
