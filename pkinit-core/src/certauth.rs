@@ -2,7 +2,7 @@ use crate::constants;
 use crate::error::PkinitError;
 use crate::san;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CertauthResult {
     Authorized,
     Rejected(String),

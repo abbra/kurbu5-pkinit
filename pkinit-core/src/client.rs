@@ -20,6 +20,7 @@ pub struct AsRepParams<'a> {
     pub server_name: &'a str,
 }
 
+#[derive(Debug)]
 pub enum RetryAction {
     RetryWithDhParams(DhGroup),
     RetryWithKemAlgorithm(KemAlgorithm),

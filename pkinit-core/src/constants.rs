@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DhGroup {
     Oakley2048,
     Oakley4096,
@@ -23,7 +23,7 @@ impl DhGroup {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KemAlgorithm {
     MlKem512,
     MlKem768,
