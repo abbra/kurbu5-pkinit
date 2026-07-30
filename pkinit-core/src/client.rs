@@ -10,6 +10,15 @@ use crate::crypto::kdf::{self, DerivedKey, OctetString2Key, encode_principal_for
 use crate::error::PkinitError;
 use crate::identity::{PkinitIdentity, TrustStore};
 
+pub struct AsRepParams<'a> {
+    pub nonce: i32,
+    pub enctype: i32,
+    pub as_req_der: &'a [u8],
+    pub pa_rep_raw: &'a [u8],
+    pub client_name: &'a str,
+    pub server_name: &'a str,
+}
+
 pub enum RetryAction {
     RetryWithDhParams(DhGroup),
     RetryWithCerts,
@@ -171,12 +180,7 @@ impl PkinitClientState {
     pub fn process_as_rep(
         &mut self,
         pa_rep_der: &[u8],
-        nonce: i32,
-        enctype: i32,
-        as_req_der: &[u8],
-        pa_rep_raw: &[u8],
-        client_name: &str,
-        server_name: &str,
+        params: &AsRepParams<'_>,
         o2k: &dyn OctetString2Key,
     ) -> Result<DerivedKey, PkinitError> {
         let pa_rep: synta_krb5::pkinit::PaPkAsRep<'_> =
@@ -184,16 +188,9 @@ impl PkinitClientState {
                 .map_err(|e| PkinitError::Asn1(format!("decode PA-PK-AS-REP: {e}")))?;
 
         match pa_rep {
-            synta_krb5::pkinit::PaPkAsRep::DhInfo(dh_rep_info) => self.process_dh_rep(
-                dh_rep_info,
-                nonce,
-                enctype,
-                as_req_der,
-                pa_rep_raw,
-                client_name,
-                server_name,
-                o2k,
-            ),
+            synta_krb5::pkinit::PaPkAsRep::DhInfo(dh_rep_info) => {
+                self.process_dh_rep(dh_rep_info, params, o2k)
+            }
             synta_krb5::pkinit::PaPkAsRep::EncKeyPack(_) => Err(PkinitError::Unsupported(
                 "RSA key transport mode not supported".into(),
             )),
@@ -203,14 +200,14 @@ impl PkinitClientState {
     fn process_dh_rep(
         &mut self,
         dh_rep_info: synta_krb5::pkinit::DHRepInfo<'_>,
-        nonce: i32,
-        enctype: i32,
-        as_req_der: &[u8],
-        pa_rep_raw: &[u8],
-        client_name: &str,
-        server_name: &str,
+        params: &AsRepParams<'_>,
         o2k: &dyn OctetString2Key,
     ) -> Result<DerivedKey, PkinitError> {
+        let nonce = params.nonce;
+        let enctype = params.enctype;
+        let as_req_der = params.as_req_der;
+        let client_name = params.client_name;
+        let server_name = params.server_name;
         let verified = cms::verify_signed_data(dh_rep_info.dh_signed_data.as_bytes())?;
 
         if verified.content_type.as_slice() != synta_krb5::pkinit::ID_PKINIT_DHKEY_DATA {
@@ -277,13 +274,15 @@ impl PkinitClientState {
             let party_v = encode_principal_for_kdf(server_name)?;
 
             kdf::pkinit_kdf(
-                &shared_secret,
-                &kdf_oid,
-                enctype,
-                &party_u,
-                &party_v,
-                as_req_der,
-                pa_rep_raw,
+                &kdf::KdfInput {
+                    shared_secret: &shared_secret,
+                    kdf_oid: &kdf_oid,
+                    enctype,
+                    party_u_info: &party_u,
+                    party_v_info: &party_v,
+                    as_req_der,
+                    pa_pk_as_rep_der: params.pa_rep_raw,
+                },
                 o2k,
             )
         } else {
@@ -308,11 +307,11 @@ impl PkinitClientState {
         for pa in &padata_list {
             let pa_type = pa.padata_type.get();
 
-            if pa_type == synta_krb5::constants::TD_DH_PARAMETERS {
-                if let Some(group) = parse_td_dh_parameters(pa.padata_value.as_bytes()) {
-                    self.dh_key = None;
-                    return Ok(RetryAction::RetryWithDhParams(group));
-                }
+            if pa_type == synta_krb5::constants::TD_DH_PARAMETERS
+                && let Some(group) = parse_td_dh_parameters(pa.padata_value.as_bytes())
+            {
+                self.dh_key = None;
+                return Ok(RetryAction::RetryWithDhParams(group));
             }
 
             if pa_type == synta_krb5::constants::TD_TRUSTED_CERTIFIERS

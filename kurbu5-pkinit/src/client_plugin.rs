@@ -162,12 +162,14 @@ impl ClpreauthModule for PkinitClient {
                 let derived = state
                     .process_as_rep(
                         &pa_contents,
-                        nonce,
-                        enctype,
-                        as_req_der,
-                        &pa_contents,
-                        &client_name,
-                        &server_name,
+                        &pkinit_core::client::AsRepParams {
+                            nonce,
+                            enctype,
+                            as_req_der,
+                            pa_rep_raw: &pa_contents,
+                            client_name: &client_name,
+                            server_name: &server_name,
+                        },
                         &o2k,
                     )
                     .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;

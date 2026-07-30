@@ -164,11 +164,13 @@ impl PkinitKdc {
             .state
             .build_as_rep(
                 &modreq.verified,
-                nonce,
-                enctype,
-                req.request_packet,
-                &client_name,
-                &server_name,
+                &pkinit_core::server::BuildAsRepParams {
+                    nonce,
+                    enctype,
+                    as_req_der: req.request_packet,
+                    client_name: &client_name,
+                    server_name: &server_name,
+                },
                 &o2k,
             )
             .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
