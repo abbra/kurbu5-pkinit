@@ -109,13 +109,20 @@ pub fn verify_kdc_eku(cert_der: &[u8]) -> Result<(), PkinitError> {
             || oid.as_slice() == constants::ID_KP_SERVER_AUTH
     });
 
-    if acceptable {
-        Ok(())
-    } else {
-        Err(PkinitError::EkuMismatch(
+    if !acceptable {
+        return Err(PkinitError::EkuMismatch(
             "KDC certificate missing id-pkinit-KPKdc or id-kp-serverAuth".into(),
-        ))
+        ));
     }
+
+    let ku = san::extract_key_usage(cert_der)?;
+    if ku != 0 && (ku & (1 << synta_certificate::KEY_USAGE_DIGITAL_SIGNATURE)) == 0 {
+        return Err(PkinitError::EkuMismatch(
+            "KDC certificate missing digitalSignature KeyUsage".into(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Evaluate a certificate against a dbmatch rule.
@@ -455,6 +462,47 @@ mod tests {
 
         let result = verify_kdc_eku(&cert);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_kdc_eku_rejects_missing_digital_signature() {
+        let (key, spki, name) = generate_key_and_name();
+        let eku_der = ExtendedKeyUsageBuilder::new()
+            .add_oid(constants::ID_PKINIT_KPKDC)
+            .build()
+            .unwrap();
+        let ku_der =
+            synta_certificate::encode_key_usage(1 << synta_certificate::KEY_USAGE_KEY_AGREEMENT)
+                .unwrap();
+        let cert = build_cert_with_extensions(
+            key.as_ref(),
+            &spki,
+            &name,
+            vec![
+                (synta_certificate::oids::EXTENDED_KEY_USAGE, false, eku_der),
+                (synta_certificate::oids::KEY_USAGE, true, ku_der),
+            ],
+        );
+
+        let result = verify_kdc_eku(&cert);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_kdc_eku_accepts_no_key_usage_extension() {
+        let (key, spki, name) = generate_key_and_name();
+        let eku_der = ExtendedKeyUsageBuilder::new()
+            .add_oid(constants::ID_PKINIT_KPKDC)
+            .build()
+            .unwrap();
+        let cert = build_cert_with_extensions(
+            key.as_ref(),
+            &spki,
+            &name,
+            vec![(synta_certificate::oids::EXTENDED_KEY_USAGE, false, eku_der)],
+        );
+
+        verify_kdc_eku(&cert).unwrap();
     }
 
     // -- db_match --
