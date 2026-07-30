@@ -101,6 +101,9 @@ class PkinitRealm:
             args += ["-pkeyopt", pkeyopt]
         return args
 
+    def _is_pq_key_type(self):
+        return self.key_type.startswith("mldsa")
+
     def _generate_pki(self):
         os.makedirs(self.certs_dir, exist_ok=True)
         newkey = self._newkey_args()
@@ -121,7 +124,7 @@ class PkinitRealm:
             f.write(textwrap.dedent(f"""\
                 [kdc_exts]
                 basicConstraints = CA:FALSE
-                keyUsage = digitalSignature,keyEncipherment
+                keyUsage = digitalSignature{'' if self._is_pq_key_type() else ',keyEncipherment'}
                 extendedKeyUsage = 1.3.6.1.5.2.3.5
                 subjectKeyIdentifier = hash
                 authorityKeyIdentifier = keyid,issuer
