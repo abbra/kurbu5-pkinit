@@ -262,8 +262,7 @@ class PkinitRealm:
                 {self.realm} = {{
                     kdc = 127.0.0.1:{self.portbase}
                     admin_server = 127.0.0.1:{self.portbase + 1}
-                    pkinit_anchors = FILE:{self.ca_cert}
-                    pkinit_identities = FILE:{self.client_cert},{self.client_key}{pqc_line}
+                    pkinit_anchors = FILE:{self.ca_cert}{pqc_line}
                 }}
 
             [domain_realm]

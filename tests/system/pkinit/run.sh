@@ -153,10 +153,11 @@ run_combo() {
     # shellcheck disable=SC1090
     source "$ENV_FILE"
 
-    # Test 1: Normal PKINIT kinit
+    # Test 1: Normal PKINIT kinit (identity via -X, anchors from krb5.conf)
     if KRB5_CONFIG="$KRB5_CONFIG" \
        KRB5CCNAME="$KRB5CCNAME" \
-       kinit "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" </dev/null 2>&1; then
+       kinit -X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}" \
+             "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" </dev/null 2>&1; then
         report "$combo" "kinit succeeded" "PASS"
     else
         report "$combo" "kinit failed" "FAIL"
@@ -171,7 +172,7 @@ run_combo() {
         echo "$KLIST_OUTPUT"
     fi
 
-    # Test 3: Anonymous PKINIT
+    # Test 3: Anonymous PKINIT (no identity needed, anchors from krb5.conf)
     ANON_CCACHE="FILE:$TESTDIR/ccache-anon"
     if KRB5_CONFIG="$KRB5_CONFIG" \
        KRB5CCNAME="$ANON_CCACHE" \
