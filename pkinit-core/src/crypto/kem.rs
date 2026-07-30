@@ -35,7 +35,10 @@ impl KemKeyPair {
     /// Decapsulate a KEM ciphertext to recover the shared secret.
     ///
     /// Takes `self` by value to ensure the private key is erased after use.
-    pub fn decapsulate(self, ciphertext: &[u8]) -> Result<Vec<u8>, PkinitError> {
+    pub fn decapsulate(
+        self,
+        ciphertext: &[u8],
+    ) -> Result<native_ossl::util::SecretBuf, PkinitError> {
         if ciphertext.len() != self.algorithm.ciphertext_len() {
             return Err(PkinitError::KemCiphertextLengthInvalid {
                 expected: self.algorithm.ciphertext_len(),
@@ -44,6 +47,7 @@ impl KemKeyPair {
         }
         self.private_key
             .ml_kem_decapsulate(ciphertext)
+            .map(native_ossl::util::SecretBuf::new)
             .map_err(|e| PkinitError::KemDecapFailed(format!("{e}")))
     }
 }
@@ -54,7 +58,7 @@ impl KemKeyPair {
 pub fn encapsulate_for_client(
     client_spki_der: &[u8],
     algorithm: KemAlgorithm,
-) -> Result<(Vec<u8>, Vec<u8>), PkinitError> {
+) -> Result<(Vec<u8>, native_ossl::util::SecretBuf), PkinitError> {
     let pub_key = BackendPublicKey::from_spki_der(client_spki_der.to_vec());
     let (ciphertext, shared_secret) = pub_key.ml_kem_encapsulate().map_err(|e| {
         PkinitError::KemEncapFailed(format!(
@@ -70,7 +74,7 @@ pub fn encapsulate_for_client(
         });
     }
 
-    Ok((ciphertext, shared_secret))
+    Ok((ciphertext, native_ossl::util::SecretBuf::new(shared_secret)))
 }
 
 #[cfg(test)]
@@ -94,12 +98,12 @@ mod tests {
             encapsulate_for_client(&spki, KemAlgorithm::MlKem768).unwrap();
         assert_eq!(ciphertext.len(), KemAlgorithm::MlKem768.ciphertext_len());
         assert_eq!(
-            shared_secret.len(),
+            shared_secret.as_ref().len(),
             KemAlgorithm::MlKem768.shared_secret_len()
         );
 
         let recovered = kp.decapsulate(&ciphertext).unwrap();
-        assert_eq!(recovered, shared_secret);
+        assert_eq!(recovered.as_ref(), shared_secret.as_ref());
     }
 
     #[test]
@@ -109,10 +113,10 @@ mod tests {
 
         let (ct, ss) = encapsulate_for_client(&spki, KemAlgorithm::MlKem512).unwrap();
         assert_eq!(ct.len(), KemAlgorithm::MlKem512.ciphertext_len());
-        assert_eq!(ss.len(), 32);
+        assert_eq!(ss.as_ref().len(), 32);
 
         let recovered = kp.decapsulate(&ct).unwrap();
-        assert_eq!(recovered, ss);
+        assert_eq!(recovered.as_ref(), ss.as_ref());
     }
 
     #[test]
@@ -124,20 +128,19 @@ mod tests {
         assert_eq!(ct.len(), KemAlgorithm::MlKem1024.ciphertext_len());
 
         let recovered = kp.decapsulate(&ct).unwrap();
-        assert_eq!(recovered, ss);
+        assert_eq!(recovered.as_ref(), ss.as_ref());
     }
 
     #[test]
     fn kem_decap_rejects_wrong_ciphertext_length() {
         let kp = KemKeyPair::generate(KemAlgorithm::MlKem768).unwrap();
-        let result = kp.decapsulate(&[0u8; 100]);
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            PkinitError::KemCiphertextLengthInvalid { expected, actual } => {
+        match kp.decapsulate(&[0u8; 100]) {
+            Err(PkinitError::KemCiphertextLengthInvalid { expected, actual }) => {
                 assert_eq!(expected, 1088);
                 assert_eq!(actual, 100);
             }
-            other => panic!("unexpected error: {other}"),
+            Err(other) => panic!("unexpected error: {other}"),
+            Ok(_) => panic!("expected error for wrong ciphertext length"),
         }
     }
 

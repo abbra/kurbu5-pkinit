@@ -320,7 +320,7 @@ impl PkinitKdcState {
 
         let derived_key = kdf::pkinit_kem_kdf(
             &kdf::KemKdfInput {
-                shared_secret: &shared_secret,
+                shared_secret: shared_secret.as_ref(),
                 enctype: params.enctype,
                 as_req_der: params.as_req_der,
                 kem_signed_data: &kem_signed_data,
@@ -401,7 +401,7 @@ impl PkinitKdcState {
 
             kdf::pkinit_kdf(
                 &kdf::KdfInput {
-                    shared_secret: &shared_secret,
+                    shared_secret: shared_secret.as_ref(),
                     kdf_oid,
                     enctype,
                     party_u_info: &party_u,
@@ -415,10 +415,12 @@ impl PkinitKdcState {
             let mut combined_nonce = verified.client_dh_nonce.clone().unwrap_or_default();
             combined_nonce.extend_from_slice(&server_dh_nonce);
 
-            let mut secret_with_nonce = shared_secret;
-            secret_with_nonce.extend_from_slice(&combined_nonce);
+            let mut combined = Vec::with_capacity(shared_secret.len() + combined_nonce.len());
+            combined.extend_from_slice(shared_secret.as_ref());
+            combined.extend_from_slice(&combined_nonce);
+            let secret_with_nonce = native_ossl::util::SecretBuf::new(combined);
 
-            kdf::octetstring2key(&secret_with_nonce, enctype, o2k)?
+            kdf::octetstring2key(secret_with_nonce.as_ref(), enctype, o2k)?
         };
 
         Ok((pa_rep_der, derived_key))
@@ -451,11 +453,15 @@ mod tests {
 
     struct MockO2K;
     impl crate::crypto::kdf::OctetString2Key for MockO2K {
-        fn random_to_key(&self, enctype: i32, random_data: &[u8]) -> Result<Vec<u8>, PkinitError> {
+        fn random_to_key(
+            &self,
+            enctype: i32,
+            random_data: &[u8],
+        ) -> Result<native_ossl::util::SecretBuf, PkinitError> {
             let len = self.key_length(enctype)?;
             let mut key = random_data.to_vec();
             key.resize(len, 0);
-            Ok(key[..len].to_vec())
+            Ok(native_ossl::util::SecretBuf::new(key[..len].to_vec()))
         }
         fn random_length(&self, enctype: i32) -> Result<usize, PkinitError> {
             self.key_length(enctype)
@@ -665,6 +671,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(client_key.enctype, server_key.enctype);
-        assert_eq!(client_key.key_data, server_key.key_data);
+        assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
     }
 }

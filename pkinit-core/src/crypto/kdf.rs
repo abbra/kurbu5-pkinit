@@ -1,15 +1,17 @@
+use native_ossl::util::SecretBuf;
+
 use crate::constants;
 use crate::error::PkinitError;
 
 pub struct DerivedKey {
     pub enctype: i32,
-    pub key_data: Vec<u8>,
+    pub key_data: SecretBuf,
 }
 
 /// Trait for Kerberos key derivation operations that require MIT krb5 internals.
 /// pkinit-core defines the trait; kurbu5-pkinit provides the implementation.
 pub trait OctetString2Key {
-    fn random_to_key(&self, enctype: i32, random_data: &[u8]) -> Result<Vec<u8>, PkinitError>;
+    fn random_to_key(&self, enctype: i32, random_data: &[u8]) -> Result<SecretBuf, PkinitError>;
     fn random_length(&self, enctype: i32) -> Result<usize, PkinitError>;
     fn key_length(&self, enctype: i32) -> Result<usize, PkinitError>;
 }
@@ -251,8 +253,12 @@ mod tests {
 
     struct MockO2K;
     impl OctetString2Key for MockO2K {
-        fn random_to_key(&self, _enctype: i32, random_data: &[u8]) -> Result<Vec<u8>, PkinitError> {
-            Ok(random_data.to_vec())
+        fn random_to_key(
+            &self,
+            _enctype: i32,
+            random_data: &[u8],
+        ) -> Result<SecretBuf, PkinitError> {
+            Ok(SecretBuf::from_slice(random_data))
         }
         fn random_length(&self, enctype: i32) -> Result<usize, PkinitError> {
             self.key_length(enctype)
@@ -288,7 +294,7 @@ mod tests {
         assert!(result.is_ok());
         let key = result.unwrap();
         assert_eq!(key.enctype, 18);
-        assert_eq!(key.key_data.len(), 32);
+        assert_eq!(key.key_data.as_ref().len(), 32);
     }
 
     #[test]
@@ -309,7 +315,7 @@ mod tests {
         assert!(result.is_ok());
         let key = result.unwrap();
         assert_eq!(key.enctype, 17);
-        assert_eq!(key.key_data.len(), 16);
+        assert_eq!(key.key_data.as_ref().len(), 16);
     }
 
     #[test]
@@ -330,7 +336,7 @@ mod tests {
         assert!(result.is_ok());
         let key = result.unwrap();
         assert_eq!(key.enctype, 18);
-        assert_eq!(key.key_data.len(), 32);
+        assert_eq!(key.key_data.as_ref().len(), 32);
     }
 
     #[test]
@@ -363,7 +369,7 @@ mod tests {
             &MockO2K,
         )
         .unwrap();
-        assert_ne!(key1.key_data, key2.key_data);
+        assert_ne!(key1.key_data.as_ref(), key2.key_data.as_ref());
     }
 
     #[test]
@@ -371,17 +377,17 @@ mod tests {
         let shared_secret = vec![0x42u8; 64];
         let key = octetstring2key(&shared_secret, 18, &MockO2K).unwrap();
         assert_eq!(key.enctype, 18);
-        assert_eq!(key.key_data.len(), 32);
-        assert_eq!(&key.key_data, &shared_secret[..32]);
+        assert_eq!(key.key_data.as_ref().len(), 32);
+        assert_eq!(key.key_data.as_ref(), &shared_secret[..32]);
     }
 
     #[test]
     fn octetstring2key_pads_short_secret() {
         let shared_secret = vec![0x42u8; 8];
         let key = octetstring2key(&shared_secret, 18, &MockO2K).unwrap();
-        assert_eq!(key.key_data.len(), 32);
-        assert_eq!(&key.key_data[..8], &[0x42u8; 8]);
-        assert_eq!(&key.key_data[8..], &[0u8; 24]);
+        assert_eq!(key.key_data.as_ref().len(), 32);
+        assert_eq!(&key.key_data.as_ref()[..8], &[0x42u8; 8]);
+        assert_eq!(&key.key_data.as_ref()[8..], &[0u8; 24]);
     }
 
     #[test]
@@ -399,7 +405,7 @@ mod tests {
         assert!(result.is_ok());
         let key = result.unwrap();
         assert_eq!(key.enctype, 18);
-        assert_eq!(key.key_data.len(), 32);
+        assert_eq!(key.key_data.as_ref().len(), 32);
     }
 
     #[test]
@@ -416,7 +422,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(key.enctype, 17);
-        assert_eq!(key.key_data.len(), 16);
+        assert_eq!(key.key_data.as_ref().len(), 16);
     }
 
     #[test]
@@ -443,7 +449,7 @@ mod tests {
             &MockO2K,
         )
         .unwrap();
-        assert_ne!(key1.key_data, key2.key_data);
+        assert_ne!(key1.key_data.as_ref(), key2.key_data.as_ref());
     }
 
     #[test]
@@ -469,7 +475,7 @@ mod tests {
             &MockO2K,
         )
         .unwrap();
-        assert_ne!(key1.key_data, key2.key_data);
+        assert_ne!(key1.key_data.as_ref(), key2.key_data.as_ref());
     }
 
     #[test]
@@ -483,6 +489,6 @@ mod tests {
         };
         let key1 = pkinit_kem_kdf(&input, &MockO2K).unwrap();
         let key2 = pkinit_kem_kdf(&input, &MockO2K).unwrap();
-        assert_eq!(key1.key_data, key2.key_data);
+        assert_eq!(key1.key_data.as_ref(), key2.key_data.as_ref());
     }
 }

@@ -28,7 +28,11 @@ impl Krb5OctetString2Key {
 }
 
 impl OctetString2Key for Krb5OctetString2Key {
-    fn random_to_key(&self, enctype: i32, random_data: &[u8]) -> Result<Vec<u8>, PkinitError> {
+    fn random_to_key(
+        &self,
+        enctype: i32,
+        random_data: &[u8],
+    ) -> Result<native_ossl::util::SecretBuf, PkinitError> {
         let keylength = self.key_length(enctype)?;
 
         let seed = kurbu5_sys::krb5_data {
@@ -52,7 +56,7 @@ impl OctetString2Key for Krb5OctetString2Key {
             )));
         }
 
-        Ok(key_buf)
+        Ok(native_ossl::util::SecretBuf::new(key_buf))
     }
 
     fn random_length(&self, enctype: i32) -> Result<usize, PkinitError> {

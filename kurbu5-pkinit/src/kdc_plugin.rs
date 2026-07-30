@@ -208,11 +208,12 @@ impl PkinitKdc {
             )
             .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
 
+        let key_bytes = derived.key_data.as_ref();
         let keyblock = kurbu5_sys::krb5_keyblock {
             magic: 0,
             enctype: derived.enctype,
-            length: derived.key_data.len() as u32,
-            contents: derived.key_data.as_ptr() as *mut u8,
+            length: key_bytes.len() as u32,
+            contents: key_bytes.as_ptr() as *mut u8,
         };
         callbacks.replace_reply_key(&keyblock, false)?;
 

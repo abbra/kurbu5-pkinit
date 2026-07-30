@@ -196,11 +196,12 @@ impl ClpreauthModule for PkinitClient {
                     })?;
                 pkinit_trace!(ctx, "PKINIT client verified DH reply");
 
+                let key_bytes = derived.key_data.as_ref();
                 let mut keyblock = kurbu5_sys::krb5_keyblock {
                     magic: 0,
                     enctype: derived.enctype,
-                    length: derived.key_data.len() as u32,
-                    contents: derived.key_data.as_ptr() as *mut u8,
+                    length: key_bytes.len() as u32,
+                    contents: key_bytes.as_ptr() as *mut u8,
                 };
                 let key_ref = unsafe { KeyblockRef::from_raw(&mut keyblock) };
                 callbacks.set_as_key(&key_ref)?;

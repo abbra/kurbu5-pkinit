@@ -331,7 +331,7 @@ impl PkinitClientState {
 
             kdf::pkinit_kdf(
                 &kdf::KdfInput {
-                    shared_secret: &shared_secret,
+                    shared_secret: shared_secret.as_ref(),
                     kdf_oid: &kdf_oid,
                     enctype,
                     party_u_info: &party_u,
@@ -347,10 +347,12 @@ impl PkinitClientState {
                 combined_nonce.extend_from_slice(sn);
             }
 
-            let mut secret_with_nonce = shared_secret;
-            secret_with_nonce.extend_from_slice(&combined_nonce);
+            let mut combined = Vec::with_capacity(shared_secret.len() + combined_nonce.len());
+            combined.extend_from_slice(shared_secret.as_ref());
+            combined.extend_from_slice(&combined_nonce);
+            let secret_with_nonce = native_ossl::util::SecretBuf::new(combined);
 
-            kdf::octetstring2key(&secret_with_nonce, enctype, o2k)
+            kdf::octetstring2key(secret_with_nonce.as_ref(), enctype, o2k)
         }
     }
 
@@ -446,7 +448,7 @@ impl PkinitClientState {
 
         kdf::pkinit_kem_kdf(
             &kdf::KemKdfInput {
-                shared_secret: &shared_secret,
+                shared_secret: shared_secret.as_ref(),
                 enctype: params.enctype,
                 as_req_der: params.as_req_der,
                 kem_signed_data: kem_rep_info.kem_signed_data.as_bytes(),

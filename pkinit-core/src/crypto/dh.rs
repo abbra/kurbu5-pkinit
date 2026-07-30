@@ -29,7 +29,10 @@ impl DhKeyPair {
             .map_err(|e| PkinitError::Ossl(format!("SPKI encode failed: {e}")))
     }
 
-    pub fn derive_shared_secret(&self, peer_spki_der: &[u8]) -> Result<Vec<u8>, PkinitError> {
+    pub fn derive_shared_secret(
+        &self,
+        peer_spki_der: &[u8],
+    ) -> Result<native_ossl::util::SecretBuf, PkinitError> {
         let peer = Pkey::<Public>::from_der(peer_spki_der)
             .map_err(|e| PkinitError::DhAgreementFailed(format!("peer key decode: {e}")))?;
         let mut ctx = DeriveCtx::new(&self.pkey)
@@ -44,7 +47,7 @@ impl DhKeyPair {
             .derive(&mut buf)
             .map_err(|e| PkinitError::DhAgreementFailed(format!("derive: {e}")))?;
         buf.truncate(actual);
-        Ok(buf)
+        Ok(native_ossl::util::SecretBuf::new(buf))
     }
 }
 
@@ -348,7 +351,7 @@ mod tests {
         let secret_a = alice.derive_shared_secret(&bob_pub).unwrap();
         let secret_b = bob.derive_shared_secret(&alice_pub).unwrap();
 
-        assert_eq!(secret_a, secret_b);
+        assert_eq!(secret_a.as_ref(), secret_b.as_ref());
         assert!(!secret_a.is_empty());
     }
 
@@ -363,7 +366,7 @@ mod tests {
         let secret_a = alice.derive_shared_secret(&bob_pub).unwrap();
         let secret_b = bob.derive_shared_secret(&alice_pub).unwrap();
 
-        assert_eq!(secret_a, secret_b);
+        assert_eq!(secret_a.as_ref(), secret_b.as_ref());
     }
 
     #[test]
@@ -422,7 +425,7 @@ mod tests {
         let secret_a = alice.derive_shared_secret(&bob_pub).unwrap();
         let secret_b = bob.derive_shared_secret(&alice_pub).unwrap();
 
-        assert_eq!(secret_a, secret_b);
+        assert_eq!(secret_a.as_ref(), secret_b.as_ref());
         assert!(!secret_a.is_empty());
     }
 
@@ -437,7 +440,7 @@ mod tests {
         let secret_a = alice.derive_shared_secret(&bob_pub).unwrap();
         let secret_b = bob.derive_shared_secret(&alice_pub).unwrap();
 
-        assert_eq!(secret_a, secret_b);
+        assert_eq!(secret_a.as_ref(), secret_b.as_ref());
         assert!(!secret_a.is_empty());
     }
 
@@ -452,7 +455,7 @@ mod tests {
         let secret_a = alice.derive_shared_secret(&bob_pub).unwrap();
         let secret_b = bob.derive_shared_secret(&alice_pub).unwrap();
 
-        assert_eq!(secret_a, secret_b);
+        assert_eq!(secret_a.as_ref(), secret_b.as_ref());
         assert!(!secret_a.is_empty());
     }
 

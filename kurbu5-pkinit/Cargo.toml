@@ -15,3 +15,4 @@ pkinit-core = { path = "../pkinit-core" }
 synta = "0.3"
 synta-krb5 = { version = "0.3", features = ["derive"] }
 libc = "0.2"
+native-ossl = "0.2"

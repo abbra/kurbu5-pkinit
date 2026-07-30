@@ -10,11 +10,15 @@ use synta_certificate::crypto::{BackendPrivateKey, PrivateKey};
 struct TestO2K;
 
 impl OctetString2Key for TestO2K {
-    fn random_to_key(&self, enctype: i32, random_data: &[u8]) -> Result<Vec<u8>, PkinitError> {
+    fn random_to_key(
+        &self,
+        enctype: i32,
+        random_data: &[u8],
+    ) -> Result<native_ossl::util::SecretBuf, PkinitError> {
         let len = self.key_length(enctype)?;
         let mut key = random_data.to_vec();
         key.resize(len, 0);
-        Ok(key[..len].to_vec())
+        Ok(native_ossl::util::SecretBuf::new(key[..len].to_vec()))
     }
 
     fn random_length(&self, enctype: i32) -> Result<usize, PkinitError> {
@@ -236,9 +240,9 @@ fn run_dh_exchange(key_type: TestKeyType, dh_group: DhGroup, enctype: i32) {
         .unwrap();
 
     assert_eq!(client_key.enctype, server_key.enctype);
-    assert_eq!(client_key.key_data, server_key.key_data);
+    assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
     assert_eq!(client_key.enctype, enctype);
-    assert!(!client_key.key_data.is_empty());
+    assert!(!client_key.key_data.as_ref().is_empty());
 }
 
 fn run_anonymous_exchange(dh_group: DhGroup) {
@@ -302,7 +306,7 @@ fn run_anonymous_exchange(dh_group: DhGroup) {
         )
         .unwrap();
 
-    assert_eq!(client_key.key_data, server_key.key_data);
+    assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
     assert_eq!(client_key.enctype, enctype);
 }
 
@@ -419,9 +423,9 @@ fn run_kem_exchange(kem_alg: KemAlgorithm, enctype: i32) {
         .unwrap();
 
     assert_eq!(client_key.enctype, server_key.enctype);
-    assert_eq!(client_key.key_data, server_key.key_data);
+    assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
     assert_eq!(client_key.enctype, enctype);
-    assert!(!client_key.key_data.is_empty());
+    assert!(!client_key.key_data.as_ref().is_empty());
 }
 
 #[test]
@@ -501,7 +505,7 @@ fn pkinit_kem_anonymous_exchange() {
         )
         .unwrap();
 
-    assert_eq!(client_key.key_data, server_key.key_data);
+    assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
     assert_eq!(client_key.enctype, enctype);
 }
 
@@ -573,6 +577,6 @@ fn pkinit_anonymous_rsa_exchange() {
         )
         .unwrap();
 
-    assert_eq!(client_key.key_data, server_key.key_data);
+    assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
     assert_eq!(client_key.enctype, enctype);
 }
