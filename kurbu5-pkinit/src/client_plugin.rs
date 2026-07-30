@@ -59,7 +59,7 @@ impl ClpreauthModule for PkinitClient {
 
         let realm = ctx.realm().ok();
         let profile = kurbu5_rs::Profile::from_context(ctx)?;
-        self.config = profile::read_client_config(&profile, realm.as_deref());
+        profile::read_client_config(&profile, realm.as_deref(), &mut self.config);
 
         let identity = if is_anonymous {
             pkinit_trace!(ctx, "PKINIT client using anonymous mode");
@@ -218,6 +218,39 @@ impl ClpreauthModule for PkinitClient {
             }
             _ => Err(Krb5Error::NoHandle),
         }
+    }
+
+    fn supply_gic_opts(
+        &mut self,
+        ctx: &PluginContext<'_>,
+        _opt: *mut kurbu5_sys::krb5_get_init_creds_opt,
+        attr: &str,
+        value: &str,
+    ) -> Result<(), Krb5Error> {
+        match attr {
+            "X509_user_identity" => {
+                if self.config.identity.is_some() {
+                    return Err(Krb5Error::Custom(-1765328174));
+                }
+                pkinit_trace!(ctx, "PKINIT received -X {}={}", attr, value);
+                self.config.identity = Some(value.to_string());
+            }
+            "X509_anchors" => {
+                pkinit_trace!(ctx, "PKINIT received -X {}={}", attr, value);
+                self.config.anchors.push(value.to_string());
+            }
+            "disable_freshness"
+                if matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "yes" | "true" | "1"
+                ) =>
+            {
+                pkinit_trace!(ctx, "PKINIT received -X {}={}", attr, value);
+                self.config.disable_freshness = true;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     fn tryagain(

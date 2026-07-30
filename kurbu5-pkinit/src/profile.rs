@@ -2,14 +2,16 @@ use kurbu5_rs::Profile;
 use pkinit_core::config::{PkinitClientConfig, PkinitKdcConfig};
 use pkinit_core::constants::{DhGroup, KemAlgorithm};
 
-pub fn read_client_config(profile: &Profile, realm: Option<&str>) -> PkinitClientConfig {
-    let mut config = PkinitClientConfig::default();
-
-    if let Ok(v) = profile.get_string("libdefaults", "pkinit_identities", None, None) {
+pub fn read_client_config(profile: &Profile, realm: Option<&str>, config: &mut PkinitClientConfig) {
+    if config.identity.is_none()
+        && let Ok(v) = profile.get_string("libdefaults", "pkinit_identities", None, None)
+    {
         config.identity = Some(v);
     }
 
-    if let Ok(anchors) = profile.get_values(&["libdefaults", "pkinit_anchors"]) {
+    if config.anchors.is_empty()
+        && let Ok(anchors) = profile.get_values(&["libdefaults", "pkinit_anchors"])
+    {
         config.anchors = anchors;
     }
     if let Ok(pool) = profile.get_values(&["libdefaults", "pkinit_pool"]) {
@@ -43,10 +45,15 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>) -> PkinitClien
     }
 
     if let Some(realm) = realm {
-        if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_identities"), None) {
+        if config.identity.is_none()
+            && let Ok(v) =
+                profile.get_string("realms", realm, Some("pkinit_identities"), None)
+        {
             config.identity = Some(v);
         }
-        if let Ok(anchors) = profile.get_values(&["realms", realm, "pkinit_anchors"]) {
+        if config.anchors.is_empty()
+            && let Ok(anchors) = profile.get_values(&["realms", realm, "pkinit_anchors"])
+        {
             config.anchors = anchors;
         }
         if let Ok(pool) = profile.get_values(&["realms", realm, "pkinit_pool"]) {
@@ -76,7 +83,6 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>) -> PkinitClien
     }
 
     config.dh_group = dh_group_from_min_bits(config.dh_min_bits);
-    config
 }
 
 pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
