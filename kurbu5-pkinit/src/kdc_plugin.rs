@@ -322,13 +322,26 @@ impl PkinitKdc {
     }
 }
 
-pub struct PkinitCertauth;
+pub struct PkinitCertauth {
+    allow_upn: bool,
+}
 
 impl CertauthModule for PkinitCertauth {
     const NAME: &'static std::ffi::CStr = c"pkinit";
 
     fn init_module(_ctx: &PluginContext<'_>) -> Result<Self, Krb5Error> {
-        Ok(PkinitCertauth)
+        Ok(PkinitCertauth { allow_upn: false })
+    }
+
+    fn init_module_ex(ctx: &PluginContext<'_>, realms: &[&str]) -> Result<Self, Krb5Error> {
+        let allow_upn = if let Some(realm) = realms.first() {
+            let prof = kurbu5_rs::Profile::from_context(ctx)?;
+            let config = profile::read_kdc_config(&prof, realm);
+            config.allow_upn
+        } else {
+            false
+        };
+        Ok(PkinitCertauth { allow_upn })
     }
 
     fn authorize(
@@ -338,12 +351,8 @@ impl CertauthModule for PkinitCertauth {
         princ: &kurbu5_sys::krb5_principal_data,
     ) -> Result<CertauthDecision, Krb5Error> {
         let princ_str = ctx.unparse_principal(princ)?;
-        let (principal, realm) = match princ_str.split_once('@') {
-            Some(pair) => pair,
-            None => return Ok(CertauthDecision::NoOpinion),
-        };
 
-        let result = certauth::verify_client_san(cert.as_der(), principal, realm, true)
+        let result = certauth::verify_client_san(cert.as_der(), &princ_str, self.allow_upn)
             .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
 
         match result {

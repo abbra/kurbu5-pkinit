@@ -103,6 +103,9 @@ pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
     if let Ok(v) = profile.get_integer("kdcdefaults", "pkinit_dh_min_bits", None, 2048) {
         config.dh_min_bits = v as u32;
     }
+    if let Ok(v) = profile.get_boolean("kdcdefaults", "pkinit_allow_upn", None, false) {
+        config.allow_upn = v;
+    }
     if let Ok(v) = profile.get_string("kdcdefaults", "pkinit_eku_checking", None, None) {
         apply_eku_checking(
             &v,
@@ -141,6 +144,9 @@ pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
     }
     if let Ok(v) = profile.get_integer("realms", realm, Some("pkinit_dh_min_bits"), 2048) {
         config.dh_min_bits = v as u32;
+    }
+    if let Ok(v) = profile.get_boolean("realms", realm, Some("pkinit_allow_upn"), false) {
+        config.allow_upn = v;
     }
     if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_eku_checking"), None) {
         apply_eku_checking(

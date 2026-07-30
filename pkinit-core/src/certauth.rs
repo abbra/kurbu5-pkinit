@@ -11,30 +11,27 @@ pub enum CertauthResult {
 /// Verify that a client certificate's SAN matches the claimed principal.
 ///
 /// Checks PKINIT SANs (id-pkinit-san OtherName entries) for a match
-/// against `"client_principal@client_realm"`. If `allow_upn` is true,
-/// also checks Microsoft UPN SANs.
+/// against `expected_principal` (a full `"name@REALM"` string). If
+/// `allow_upn` is true, also checks Microsoft UPN SANs.
 pub fn verify_client_san(
     cert_der: &[u8],
-    client_principal: &str,
-    client_realm: &str,
+    expected_principal: &str,
     allow_upn: bool,
 ) -> Result<CertauthResult, PkinitError> {
-    let expected = format!("{client_principal}@{client_realm}");
-
     let pkinit_sans = san::extract_pkinit_sans(cert_der)?;
-    if pkinit_sans.iter().any(|s| s == &expected) {
+    if pkinit_sans.iter().any(|s| s == expected_principal) {
         return Ok(CertauthResult::Authorized);
     }
 
     if allow_upn {
         let upn_sans = san::extract_upn_sans(cert_der)?;
-        if upn_sans.iter().any(|u| u.eq_ignore_ascii_case(&expected)) {
+        if upn_sans.iter().any(|u| u.eq_ignore_ascii_case(expected_principal)) {
             return Ok(CertauthResult::Authorized);
         }
     }
 
     Ok(CertauthResult::Rejected(format!(
-        "no SAN matching {expected}"
+        "no SAN matching {expected_principal}"
     )))
 }
 
@@ -233,21 +230,21 @@ mod tests {
     #[test]
     fn verify_client_san_accepts_matching_pkinit_san() {
         let cert = build_client_cert("user", "EXAMPLE.COM");
-        let result = verify_client_san(&cert, "user", "EXAMPLE.COM", false).unwrap();
+        let result = verify_client_san(&cert, "user@EXAMPLE.COM", false).unwrap();
         assert_eq!(result, CertauthResult::Authorized);
     }
 
     #[test]
     fn verify_client_san_rejects_wrong_principal() {
         let cert = build_client_cert("user", "EXAMPLE.COM");
-        let result = verify_client_san(&cert, "admin", "EXAMPLE.COM", false).unwrap();
+        let result = verify_client_san(&cert, "admin@EXAMPLE.COM", false).unwrap();
         assert!(matches!(result, CertauthResult::Rejected(_)));
     }
 
     #[test]
     fn verify_client_san_rejects_wrong_realm() {
         let cert = build_client_cert("user", "EXAMPLE.COM");
-        let result = verify_client_san(&cert, "user", "OTHER.COM", false).unwrap();
+        let result = verify_client_san(&cert, "user@OTHER.COM", false).unwrap();
         assert!(matches!(result, CertauthResult::Rejected(_)));
     }
 
@@ -266,7 +263,7 @@ mod tests {
             vec![(synta_certificate::oids::SUBJECT_ALT_NAME, false, san_der)],
         );
 
-        let result = verify_client_san(&cert, "user", "EXAMPLE.COM", true).unwrap();
+        let result = verify_client_san(&cert, "user@EXAMPLE.COM", true).unwrap();
         assert_eq!(result, CertauthResult::Authorized);
     }
 
@@ -285,7 +282,7 @@ mod tests {
             vec![(synta_certificate::oids::SUBJECT_ALT_NAME, false, san_der)],
         );
 
-        let result = verify_client_san(&cert, "user", "EXAMPLE.COM", false).unwrap();
+        let result = verify_client_san(&cert, "user@EXAMPLE.COM", false).unwrap();
         assert!(matches!(result, CertauthResult::Rejected(_)));
     }
 
