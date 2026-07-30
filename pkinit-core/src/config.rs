@@ -1,4 +1,4 @@
-use crate::constants::DhGroup;
+use crate::constants::{DhGroup, KemAlgorithm};
 
 #[derive(Debug, Clone)]
 pub struct PkinitClientConfig {
@@ -10,6 +10,7 @@ pub struct PkinitClientConfig {
     pub disable_freshness: bool,
     pub dh_min_bits: u32,
     pub dh_group: DhGroup,
+    pub kem_algorithm: Option<KemAlgorithm>,
     pub require_hostname_match: bool,
     pub identity: Option<String>,
     pub identity_alts: Vec<String>,
@@ -29,6 +30,7 @@ impl Default for PkinitClientConfig {
             disable_freshness: false,
             dh_min_bits: 2048,
             dh_group: DhGroup::Oakley2048,
+            kem_algorithm: None,
             require_hostname_match: true,
             identity: None,
             identity_alts: Vec::new(),
