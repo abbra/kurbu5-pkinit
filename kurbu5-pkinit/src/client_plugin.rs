@@ -4,6 +4,9 @@ use kurbu5_rs::clpreauth::*;
 use kurbu5_rs::{Krb5Error, PluginContext};
 use pkinit_core::client::PkinitClientState;
 use pkinit_core::config::PkinitClientConfig;
+use pkinit_core::constants::{
+    KRB5_PREAUTH_FAILED, PA_AS_FRESHNESS, PA_PKINIT_KX, PA_PK_AS_REP, PA_PK_AS_REQ,
+};
 use pkinit_core::identity::{IdentitySource, PkinitIdentity, TrustStore};
 
 use crate::o2k::Krb5OctetString2Key;
@@ -19,7 +22,7 @@ impl ClpreauthModule for PkinitClient {
     const NAME: &'static std::ffi::CStr = c"pkinit";
 
     fn pa_type_list() -> &'static [i32] {
-        static LIST: [i32; 5] = [17, 16, 147, 150, 0];
+        static LIST: [i32; 5] = [PA_PK_AS_REP, PA_PK_AS_REQ, PA_PKINIT_KX, PA_AS_FRESHNESS, 0];
         &LIST
     }
 
@@ -32,8 +35,8 @@ impl ClpreauthModule for PkinitClient {
 
     fn flags(_ctx: &PluginContext<'_>, pa_type: i32) -> i32 {
         match pa_type {
-            16 | 17 => PA_REAL,
-            147 | 150 => PA_INFO,
+            PA_PK_AS_REQ | PA_PK_AS_REP => PA_REAL,
+            PA_PKINIT_KX | PA_AS_FRESHNESS => PA_INFO,
             _ => 0,
         }
     }
@@ -108,11 +111,11 @@ impl ClpreauthModule for PkinitClient {
     ) -> Result<Vec<PaData>, Krb5Error> {
         let pa_type = req.pa_data.pa_type;
         match pa_type {
-            147 => {
+            PA_PKINIT_KX => {
                 pkinit_trace!(ctx, "PKINIT client received RFC 6112 support from KDC");
                 Ok(vec![])
             }
-            150 => {
+            PA_AS_FRESHNESS => {
                 pkinit_trace!(ctx, "PKINIT client received freshness token from KDC");
                 let contents = pa_data_contents(req.pa_data);
                 if let Some(state) = &mut self.state {
@@ -120,7 +123,7 @@ impl ClpreauthModule for PkinitClient {
                 }
                 Ok(vec![])
             }
-            16 => {
+            PA_PK_AS_REQ => {
                 let state = self.state.as_mut().ok_or(Krb5Error::Custom(libc::EINVAL))?;
 
                 let hint_contents = pa_data_contents(req.pa_data);
@@ -144,9 +147,9 @@ impl ClpreauthModule for PkinitClient {
                         Krb5Error::Custom(libc::EINVAL)
                     })?;
 
-                Ok(vec![PaData::new(16, pa_req_der)])
+                Ok(vec![PaData::new(PA_PK_AS_REQ, pa_req_der)])
             }
-            17 => {
+            PA_PK_AS_REP => {
                 pkinit_trace!(ctx, "PKINIT client processing AS-REP");
                 let state = self.state.as_mut().ok_or(Krb5Error::Custom(libc::EINVAL))?;
 
@@ -227,7 +230,7 @@ impl ClpreauthModule for PkinitClient {
         match attr {
             "X509_user_identity" => {
                 if self.config.identity.is_some() {
-                    return Err(Krb5Error::Custom(-1765328174));
+                    return Err(Krb5Error::Custom(KRB5_PREAUTH_FAILED));
                 }
                 pkinit_trace!(ctx, "PKINIT received -X {}={}", attr, value);
                 self.config.identity = Some(value.to_string());

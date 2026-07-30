@@ -8,6 +8,10 @@ use kurbu5_rs::{
 };
 use pkinit_core::certauth;
 use pkinit_core::config::PkinitKdcConfig;
+use pkinit_core::constants::{
+    ENCTYPE_AES256_CTS_HMAC_SHA1_96, KRB5_KEYUSAGE_PA_PKINIT_KX, PA_PKINIT_KX, PA_PK_AS_REP,
+    PA_PK_AS_REQ,
+};
 use pkinit_core::identity::{IdentitySource, PkinitIdentity, TrustStore};
 use pkinit_core::server::{PkinitKdcState, VerifiedRequest};
 
@@ -28,7 +32,7 @@ impl KdcpreauthModule for PkinitKdc {
     const NAME: &'static std::ffi::CStr = c"pkinit";
 
     fn pa_type_list() -> &'static [i32] {
-        static LIST: [i32; 3] = [16, 147, 0];
+        static LIST: [i32; 3] = [PA_PK_AS_REQ, PA_PKINIT_KX, 0];
         &LIST
     }
 
@@ -66,7 +70,7 @@ impl KdcpreauthModule for PkinitKdc {
     }
 
     fn flags_for_type(_ctx: &PluginContext<'_>, pa_type: i32) -> i32 {
-        if pa_type == 147 {
+        if pa_type == PA_PKINIT_KX {
             0
         } else {
             PA_SUFFICIENT | PA_REPLACES_KEY | PA_TYPED_E_DATA | PA_HARDWARE
@@ -93,7 +97,7 @@ impl KdcpreauthModule for PkinitKdc {
                     ctx,
                     "PKINIT server advertising supported algorithms in hint"
                 );
-                respond(Ok(Some(PaData::new(16, hint_der))));
+                respond(Ok(Some(PaData::new(PA_PK_AS_REQ, hint_der))));
             }
             Err(_) => respond(Ok(None)),
         }
@@ -150,8 +154,8 @@ impl KdcpreauthModule for PkinitKdc {
     ) -> Result<Option<PaData>, Krb5Error> {
         let pa_type = req.padata.map(|p| p.pa_type).unwrap_or(0);
         match pa_type {
-            16 => self.return_pkinit_dh(ctx, &req, callbacks),
-            147 => Self::return_pkinit_kx(ctx, &req, callbacks),
+            PA_PK_AS_REQ => self.return_pkinit_dh(ctx, &req, callbacks),
+            PA_PKINIT_KX => Self::return_pkinit_kx(ctx, &req, callbacks),
             _ => Ok(None),
         }
     }
@@ -171,7 +175,7 @@ impl PkinitKdc {
             .ok_or(Krb5Error::Custom(libc::EINVAL))?;
 
         let nonce = modreq.verified.nonce;
-        let enctype = callbacks.fast_armor().map(|k| k.enctype).unwrap_or(18);
+        let enctype = callbacks.fast_armor().map(|k| k.enctype).unwrap_or(ENCTYPE_AES256_CTS_HMAC_SHA1_96);
 
         let o2k = Krb5OctetString2Key::new(ctx);
 
@@ -212,7 +216,7 @@ impl PkinitKdc {
         };
         callbacks.replace_reply_key(&keyblock, false)?;
 
-        Ok(Some(PaData::new(17, pa_rep_der)))
+        Ok(Some(PaData::new(PA_PK_AS_REP, pa_rep_der)))
     }
 
     fn return_pkinit_kx(
@@ -266,7 +270,7 @@ impl PkinitKdc {
             let enc = kurbu5_rs::crypto::encrypt(
                 ctx,
                 req.encrypting_key as *const _,
-                44, // KRB5_KEYUSAGE_PA_PKINIT_KX
+                KRB5_KEYUSAGE_PA_PKINIT_KX,
                 &key_der,
             )?;
 
@@ -297,7 +301,7 @@ impl PkinitKdc {
 
             kurbu5_sys::krb5_free_keyblock(ctx.as_raw(), new_session);
 
-            Ok(Some(PaData::new(147, enc_data_der)))
+            Ok(Some(PaData::new(PA_PKINIT_KX, enc_data_der)))
         }
     }
 }

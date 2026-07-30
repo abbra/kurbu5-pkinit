@@ -135,6 +135,21 @@ pub use synta_certificate::oids::ID_MS_SAN_UPN;
 // Common EKU OIDs — re-exported from synta-certificate
 pub use synta_certificate::oids::KP_SERVER_AUTH as ID_KP_SERVER_AUTH;
 
+// Kerberos PA-DATA type numbers (RFC 4120, RFC 6113, draft-ietf-kitten-pkinit-pqc)
+pub const PA_PK_AS_REQ: i32 = 16;
+pub const PA_PK_AS_REP: i32 = 17;
+pub const PA_PKINIT_KX: i32 = 147;
+pub const PA_AS_FRESHNESS: i32 = 150;
+
+// Kerberos encryption type
+pub const ENCTYPE_AES256_CTS_HMAC_SHA1_96: i32 = 18;
+
+// KRB5_KEYUSAGE_PA_PKINIT_KX (RFC 6112)
+pub const KRB5_KEYUSAGE_PA_PKINIT_KX: i32 = 44;
+
+// MIT krb5 error code: KRB5_PREAUTH_FAILED
+pub const KRB5_PREAUTH_FAILED: i32 = -1_765_328_174;
+
 // KDF preference order (server-side)
 pub const KDF_PREFERENCE_ORDER: &[&[u32]] = &[
     ID_PKINIT_KDF_AH_SHA256,
