@@ -1,6 +1,6 @@
 use pkinit_core::client::PkinitClientState;
 use pkinit_core::config::{PkinitClientConfig, PkinitKdcConfig};
-use pkinit_core::constants::{self, DhGroup};
+use pkinit_core::constants::{self, DhGroup, KemAlgorithm};
 use pkinit_core::crypto::kdf::OctetString2Key;
 use pkinit_core::error::PkinitError;
 use pkinit_core::identity::{PkinitIdentity, TrustStore};
@@ -354,6 +354,155 @@ fn pkinit_dh_ec_p521_exchange() {
 #[test]
 fn pkinit_dh_oakley4096_exchange() {
     run_dh_exchange(TestKeyType::EcP256, DhGroup::Oakley4096, 18);
+}
+
+// --- KEM exchange tests ---
+
+fn run_kem_exchange(kem_alg: KemAlgorithm, enctype: i32) {
+    let (client_id, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
+    let o2k = TestO2K;
+
+    let mut client_config = PkinitClientConfig::default();
+    client_config.kem_algorithm = Some(kem_alg);
+    let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
+    client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
+
+    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+
+    let req_body_der = b"test-kem-req-body";
+    let nonce = 77777;
+    let ctime = 1719600000i64;
+
+    let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
+
+    let verified = server
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
+        .unwrap();
+    assert!(!verified.is_anonymous);
+    assert!(matches!(
+        verified.key_exchange,
+        pkinit_core::server::KeyExchangeType::Kem(_)
+    ));
+
+    let as_req_full = b"test-kem-full-as-req";
+    let client_name = "testuser@EXAMPLE.COM";
+    let server_name = "krbtgt/EXAMPLE.COM@EXAMPLE.COM";
+    let (pa_rep, server_key) = server
+        .build_as_rep(
+            &verified,
+            &BuildAsRepParams {
+                nonce,
+                enctype,
+                as_req_der: as_req_full,
+                client_name,
+                server_name,
+            },
+            &o2k,
+        )
+        .unwrap();
+
+    assert!(pkinit_core::kem_types::is_kem_rep(&pa_rep));
+
+    let client_key = client
+        .process_as_rep(
+            &pa_rep,
+            &pkinit_core::client::AsRepParams {
+                nonce,
+                enctype,
+                as_req_der: as_req_full,
+                pa_rep_raw: &pa_rep,
+                client_name,
+                server_name,
+            },
+            &o2k,
+        )
+        .unwrap();
+
+    assert_eq!(client_key.enctype, server_key.enctype);
+    assert_eq!(client_key.key_data, server_key.key_data);
+    assert_eq!(client_key.enctype, enctype);
+    assert!(!client_key.key_data.is_empty());
+}
+
+#[test]
+fn pkinit_kem_mlkem768_exchange() {
+    run_kem_exchange(KemAlgorithm::MlKem768, 18);
+}
+
+#[test]
+fn pkinit_kem_mlkem1024_exchange() {
+    run_kem_exchange(KemAlgorithm::MlKem1024, 18);
+}
+
+#[test]
+fn pkinit_kem_mlkem512_exchange() {
+    run_kem_exchange(KemAlgorithm::MlKem512, 17);
+}
+
+#[test]
+fn pkinit_kem_anonymous_exchange() {
+    let (_, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
+    let o2k = TestO2K;
+
+    let anon_identity = PkinitIdentity {
+        cert_der: vec![],
+        key_pkcs8_der: vec![],
+        chain: vec![],
+    };
+
+    let mut client_config = PkinitClientConfig::default();
+    client_config.kem_algorithm = Some(KemAlgorithm::MlKem768);
+    let mut client = PkinitClientState::new(anon_identity, trust_store.clone(), client_config);
+    client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
+
+    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+
+    let req_body_der = b"anon-kem-req-body";
+    let nonce = 33333;
+    let enctype = 18;
+    let ctime = 1719600000i64;
+
+    let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
+
+    let verified = server
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime, None)
+        .unwrap();
+    assert!(verified.is_anonymous);
+
+    let as_req_full = b"anon-kem-full-as-req";
+    let client_name = "WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS";
+    let server_name = "krbtgt/EXAMPLE.COM@EXAMPLE.COM";
+    let (pa_rep, server_key) = server
+        .build_as_rep(
+            &verified,
+            &BuildAsRepParams {
+                nonce,
+                enctype,
+                as_req_der: as_req_full,
+                client_name,
+                server_name,
+            },
+            &o2k,
+        )
+        .unwrap();
+
+    let client_key = client
+        .process_as_rep(
+            &pa_rep,
+            &pkinit_core::client::AsRepParams {
+                nonce,
+                enctype,
+                as_req_der: as_req_full,
+                pa_rep_raw: &pa_rep,
+                client_name,
+                server_name,
+            },
+            &o2k,
+        )
+        .unwrap();
+
+    assert_eq!(client_key.key_data, server_key.key_data);
+    assert_eq!(client_key.enctype, enctype);
 }
 
 // --- Anonymous with different KDC key type ---
