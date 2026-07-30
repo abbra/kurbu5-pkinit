@@ -28,12 +28,32 @@ REALM = "PKINIT.TEST"
 PORTBASE = 63100
 
 
+SUPPORTED_KEY_TYPES = {
+    "ec:P-256": ("ec", "ec_paramgen_curve:P-256"),
+    "ec:P-384": ("ec", "ec_paramgen_curve:P-384"),
+    "ec:P-521": ("ec", "ec_paramgen_curve:P-521"),
+    "rsa:2048": ("rsa", "rsa_keygen_bits:2048"),
+    "rsa:3072": ("rsa", "rsa_keygen_bits:3072"),
+    "rsa:4096": ("rsa", "rsa_keygen_bits:4096"),
+    "mldsa44": ("mldsa44", None),
+    "mldsa65": ("mldsa65", None),
+    "mldsa87": ("mldsa87", None),
+}
+
+
 class PkinitRealm:
     def __init__(self, testdir=None, realm=REALM, portbase=PORTBASE,
-                 kdc_plugin_so=None, client_plugin_so=None, principal="user"):
+                 kdc_plugin_so=None, client_plugin_so=None, principal="user",
+                 key_type="ec:P-256"):
         self.realm = realm
         self.portbase = portbase
         self.principal = principal
+        self.key_type = key_type
+        if key_type not in SUPPORTED_KEY_TYPES:
+            raise ValueError(
+                f"Unsupported key type: {key_type}. "
+                f"Supported: {', '.join(sorted(SUPPORTED_KEY_TYPES))}"
+            )
         self.testdir = os.path.abspath(
             testdir or tempfile.mkdtemp(prefix="pkinit-test-")
         )
@@ -72,13 +92,21 @@ class PkinitRealm:
 
     # -- PKI generation --
 
+    def _newkey_args(self):
+        """Return openssl -newkey and -pkeyopt arguments for the configured key type."""
+        alg, pkeyopt = SUPPORTED_KEY_TYPES[self.key_type]
+        args = ["-newkey", alg]
+        if pkeyopt is not None:
+            args += ["-pkeyopt", pkeyopt]
+        return args
+
     def _generate_pki(self):
         os.makedirs(self.certs_dir, exist_ok=True)
+        newkey = self._newkey_args()
 
-        # CA (self-signed, EC P-256)
+        # CA (self-signed)
         self._run_openssl(
-            "req", "-x509", "-newkey", "ec",
-            "-pkeyopt", "ec_paramgen_curve:P-256",
+            "req", "-x509", *newkey,
             "-keyout", self.ca_key, "-out", self.ca_cert,
             "-days", "1", "-noenc",
             "-subj", "/CN=PKINIT Test CA",
@@ -116,8 +144,7 @@ class PkinitRealm:
 
         kdc_csr = os.path.join(self.certs_dir, "kdc.csr")
         self._run_openssl(
-            "req", "-new", "-newkey", "ec",
-            "-pkeyopt", "ec_paramgen_curve:P-256",
+            "req", "-new", *newkey,
             "-keyout", self.kdc_key, "-out", kdc_csr,
             "-noenc", "-subj", f"/CN=KDC {self.realm}",
         )
@@ -158,8 +185,7 @@ class PkinitRealm:
 
         client_csr = os.path.join(self.certs_dir, "client.csr")
         self._run_openssl(
-            "req", "-new", "-newkey", "ec",
-            "-pkeyopt", "ec_paramgen_curve:P-256",
+            "req", "-new", *newkey,
             "-keyout", self.client_key, "-out", client_csr,
             "-noenc", "-subj", f"/CN={self.principal}",
         )
@@ -390,6 +416,9 @@ def main():
                         help="Write shell-sourceable env vars to FILE")
     parser.add_argument("--principal", default="user",
                         help="Client principal name (default: user)")
+    parser.add_argument("--key-type", default="ec:P-256",
+                        choices=sorted(SUPPORTED_KEY_TYPES),
+                        help="Certificate key type (default: ec:P-256)")
     args = parser.parse_args()
 
     kdc_so = args.kdc_plugin_so or args.plugin_so
@@ -404,6 +433,7 @@ def main():
         kdc_plugin_so=kdc_so,
         client_plugin_so=client_so,
         principal=args.principal,
+        key_type=args.key_type,
     )
     realm.start()
 
