@@ -65,6 +65,7 @@ class PkinitRealm:
         self.krb5_conf = os.path.join(self.testdir, "krb5.conf")
         self.kdc_conf = os.path.join(self.testdir, "kdc.conf")
         self.kdc_log = os.path.join(self.testdir, "kdc.log")
+        self.kdc_trace = os.path.join(self.testdir, "kdc-trace.log")
         self.db_path = os.path.join(self.testdir, "db")
         self.acl_file = os.path.join(self.testdir, "acl")
         self.stash = os.path.join(self.testdir, "stash")
@@ -89,6 +90,9 @@ class PkinitRealm:
         e["KRB5_KDC_PROFILE"] = self.kdc_conf
         e["KRB5CCNAME"] = f"FILE:{self.ccache}"
         e["KRB5RCACHEDIR"] = self.testdir
+        # Surfaces pkinit_trace!() output from our own plugin (client_plugin.rs,
+        # kdc_plugin.rs) plus MIT krb5's own internal preauth trace messages.
+        e["KRB5_TRACE"] = self.kdc_trace
         return e
 
     # -- PKI generation --

@@ -191,11 +191,17 @@ run_combo() {
         echo "$ANON_KLIST"
     fi
 
-    # Dump KDC log on per-combo failure
+    # Dump KDC log and KRB5_TRACE output on per-combo failure. KRB5_TRACE is
+    # sourced from ENV_FILE and covers both the KDC process and the kinit
+    # invocations above, so it carries pkinit_trace!() output from whichever
+    # side (client or KDC) actually failed.
     if [[ $TOTAL_FAIL -gt $FAIL_BEFORE ]]; then
         echo
         echo "  [$combo] KDC log:"
         cat "$TESTDIR/kdc/kdc.log" 2>/dev/null || true
+        echo
+        echo "  [$combo] KRB5_TRACE:"
+        cat "${KRB5_TRACE:-}" 2>/dev/null || true
     fi
 
     # Cleanup
