@@ -23,17 +23,50 @@ DH/ECDH key agreement and KDF primitives are provided by
 
 ## Features
 
-- Core PKINIT (RFC 4556) with DH and elliptic-curve key exchange
-- Anonymous PKINIT (RFC 6112 / RFC 8062, PA-PKINIT-KX)
-- Algorithm-agile key derivation (RFC 8636 SP800-56A KDF), with fallback to
-  the legacy `octetstring2key` derivation
-- Post-quantum key exchange via ML-KEM-512/768/1024 (draft-ietf-kitten-pkinit-pqc),
-  with ML-DSA-based downgrade prevention
-- Freshness token support (RFC 8070) to mitigate AS-REQ replay
+- Core PKINIT with DH and elliptic-curve key exchange, for both `kinit`
+  (client) and the KDC
+- Anonymous PKINIT (PA-PKINIT-KX)
+- Algorithm-agile key derivation, with fallback to the legacy
+  `octetstring2key` derivation for peers that don't negotiate a KDF
+- Post-quantum key exchange via ML-KEM-512/768/1024, with ML-DSA-based
+  downgrade prevention
+- Freshness token support to mitigate AS-REQ replay
 - Certificate-based client authorization: SAN, UPN, and EKU checks, CRL
-  checking, and configurable minimum DH strength
-- PKCS#11 hardware token support for identity keys, in addition to
-  PEM/DER/PKCS#12 files
+  checking, and configurable minimum DH/EC group strength
+- Identity loading from PEM/DER files, PKCS#12 bundles, or a PKCS#11
+  hardware token URI
+- Interop-tested against the stock MIT `pkinit.so` in both client and KDC
+  roles (see [Testing](#testing))
+
+## Supported RFCs and Internet-Drafts
+
+### RFCs
+
+| RFC | Role |
+|---|---|
+| [RFC 3526](https://www.rfc-editor.org/rfc/rfc3526) | More MODP Diffie-Hellman groups — Oakley 2048-bit and 4096-bit groups |
+| [RFC 4556](https://www.rfc-editor.org/rfc/rfc4556) | PKINIT — core protocol: PA-PK-AS-REQ/REP, DH/EC key exchange, legacy key derivation |
+| [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280) | X.509 PKI certificate and CRL profile — chain/path validation |
+| [RFC 5652](https://www.rfc-editor.org/rfc/rfc5652) | Cryptographic Message Syntax — SignedData for AuthPack/KDCDHKeyInfo, including the unsigned variant used for anonymous PKINIT |
+| [RFC 6112](https://www.rfc-editor.org/rfc/rfc6112) | Anonymous PKINIT — PA-PKINIT-KX |
+| [RFC 8062](https://www.rfc-editor.org/rfc/rfc8062) | Anonymous Kerberos — `WELLKNOWN/ANONYMOUS` principal handling |
+| [RFC 8070](https://www.rfc-editor.org/rfc/rfc8070) | Kerberos Pre-Authentication Freshness — PA-AS-FRESHNESS |
+| [RFC 8636](https://www.rfc-editor.org/rfc/rfc8636) | PKINIT Algorithm Agility — SP800-56A KDF and its negotiation |
+| [RFC 9935](https://www.rfc-editor.org/rfc/rfc9935) | AlgorithmIdentifier encodings for ML-KEM/ML-DSA, used for the PQC OIDs |
+
+### Internet-Drafts
+
+| Draft | Role |
+|---|---|
+| [draft-bokovoy-kitten-pkinit-pqc](https://datatracker.ietf.org/doc/draft-bokovoy-kitten-pkinit-pqc/) | Post-quantum PKINIT key exchange via ML-KEM, with ML-DSA-based downgrade prevention |
+
+### Other standards
+
+| Standard | Role |
+|---|---|
+| FIPS 203 (ML-KEM) | Post-quantum key encapsulation mechanism (512/768/1024) |
+| FIPS 204 (ML-DSA) | Post-quantum signatures, used for downgrade-prevention checks on KDC certificates |
+| NIST SP 800-56A | Single-step concatenation KDF underlying RFC 8636 |
 
 ## Building
 

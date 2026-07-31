@@ -135,7 +135,7 @@ pub use synta_certificate::oids::ID_MS_SAN_UPN;
 // Common EKU OIDs — re-exported from synta-certificate
 pub use synta_certificate::oids::KP_SERVER_AUTH as ID_KP_SERVER_AUTH;
 
-// Kerberos PA-DATA type numbers (RFC 4120, RFC 6113, draft-ietf-kitten-pkinit-pqc)
+// Kerberos PA-DATA type numbers (RFC 4120, RFC 6113, draft-bokovoy-kitten-pkinit-pqc)
 pub const PA_PK_AS_REQ: i32 = 16;
 pub const PA_PK_AS_REP: i32 = 17;
 pub const PA_PKINIT_KX: i32 = 147;
