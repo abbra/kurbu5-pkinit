@@ -43,8 +43,7 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>, config: &mut P
 
     if let Some(realm) = realm {
         if config.identity.is_none()
-            && let Ok(v) =
-                profile.get_string("realms", realm, Some("pkinit_identities"), None)
+            && let Ok(v) = profile.get_string("realms", realm, Some("pkinit_identities"), None)
         {
             config.identity = Some(v);
         }

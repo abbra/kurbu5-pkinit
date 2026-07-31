@@ -304,9 +304,7 @@ pub fn extract_unsigned_content(
 /// Some implementations send anonymous PKINIT as a bare ContentInfo with
 /// contentType = id-pkinit-authData and the AuthPack as a direct OCTET STRING
 /// in the content field, rather than wrapping in CMS SignedData.
-pub fn extract_bare_content(
-    content_info_der: &[u8],
-) -> Result<(Vec<u8>, Vec<u32>), PkinitError> {
+pub fn extract_bare_content(content_info_der: &[u8]) -> Result<(Vec<u8>, Vec<u32>), PkinitError> {
     let ci = pkcs7_types::ContentInfo::from_der(content_info_der)
         .map_err(|e| PkinitError::CmsVerifyFailed(format!("parse ContentInfo: {e}")))?;
 
@@ -463,10 +461,7 @@ fn find_signer_cert(
 
 fn digest_alg_to_name(alg: &AlgorithmIdentifier<'_>) -> Result<&'static str, PkinitError> {
     synta_certificate::oids::digest_oid_to_name(alg.algorithm.components()).ok_or_else(|| {
-        PkinitError::CmsVerifyFailed(format!(
-            "unsupported digest algorithm: {}",
-            alg.algorithm
-        ))
+        PkinitError::CmsVerifyFailed(format!("unsupported digest algorithm: {}", alg.algorithm))
     })
 }
 
