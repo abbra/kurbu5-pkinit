@@ -109,7 +109,7 @@ impl PkinitKemSuppPubInfo {
 /// Context-specific, constructed, tag number 2 (KemRepInfo is a SEQUENCE).
 pub(crate) const PA_PK_AS_REP_KEM_TAG: u8 = 0xA2;
 
-/// Check whether a DER-encoded PA-PK-AS-REP begins with the kemInfo [2] tag.
+/// Check whether a DER-encoded PA-PK-AS-REP begins with the kemInfo `[2]` tag.
 pub fn is_kem_rep(pa_rep_der: &[u8]) -> bool {
     pa_rep_der.first() == Some(&PA_PK_AS_REP_KEM_TAG)
 }
