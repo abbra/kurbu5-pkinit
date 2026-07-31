@@ -25,7 +25,10 @@ pub fn verify_client_san(
 
     if allow_upn {
         let upn_sans = san::extract_upn_sans(cert_der)?;
-        if upn_sans.iter().any(|u| u.eq_ignore_ascii_case(expected_principal)) {
+        if upn_sans
+            .iter()
+            .any(|u| u.eq_ignore_ascii_case(expected_principal))
+        {
             return Ok(CertauthResult::Authorized);
         }
     }

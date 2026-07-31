@@ -128,17 +128,13 @@ pub(crate) fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, Pkini
     let (len, header_size) = der_parse_length(&pa_rep_der[1..])?;
     let value_start = 1 + header_size;
     if pa_rep_der.len() < value_start + len {
-        return Err(PkinitError::Asn1(
-            "kemInfo: truncated content".into(),
-        ));
+        return Err(PkinitError::Asn1("kemInfo: truncated content".into()));
     }
     Ok(pa_rep_der[value_start..value_start + len].to_vec())
 }
 
 /// Encode a KEMRepInfo as a `PA-PK-AS-REP.kemInfo [2] IMPLICIT OCTET STRING`.
-pub(crate) fn encode_kem_rep_wrapper(
-    kem_rep_info: &KemRepInfo,
-) -> Result<Vec<u8>, PkinitError> {
+pub(crate) fn encode_kem_rep_wrapper(kem_rep_info: &KemRepInfo) -> Result<Vec<u8>, PkinitError> {
     let inner_der = kem_rep_info
         .to_der()
         .map_err(|e| PkinitError::Asn1(format!("encode KEMRepInfo: {e}")))?;
@@ -151,9 +147,7 @@ pub(crate) fn encode_kem_rep_wrapper(
 
 fn der_parse_length(data: &[u8]) -> Result<(usize, usize), PkinitError> {
     if data.is_empty() {
-        return Err(PkinitError::Asn1(
-            "DER length: unexpected end".into(),
-        ));
+        return Err(PkinitError::Asn1("DER length: unexpected end".into()));
     }
     let first = data[0];
     if first < 0x80 {
@@ -161,9 +155,7 @@ fn der_parse_length(data: &[u8]) -> Result<(usize, usize), PkinitError> {
     } else {
         let n = (first & 0x7F) as usize;
         if n == 0 || n > 4 || data.len() < 1 + n {
-            return Err(PkinitError::Asn1(
-                "DER length: invalid long form".into(),
-            ));
+            return Err(PkinitError::Asn1("DER length: invalid long form".into()));
         }
         let mut len = 0usize;
         for &b in &data[1..1 + n] {
@@ -225,8 +217,7 @@ pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, P
     let oids: Vec<synta::ObjectIdentifier> = algorithm_oids
         .iter()
         .map(|oid| {
-            synta::ObjectIdentifier::new(oid)
-                .map_err(|e| PkinitError::Asn1(format!("OID: {e}")))
+            synta::ObjectIdentifier::new(oid).map_err(|e| PkinitError::Asn1(format!("OID: {e}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -300,9 +291,7 @@ pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, Pkinit
     let alg_ids: Vec<AlgorithmIdentifier<'_>> =
         synta::Decoder::new(tag0_content, synta::Encoding::Der)
             .decode()
-            .map_err(|e| {
-                PkinitError::Asn1(format!("decode ephemeralKeyParameters: {e}"))
-            })?;
+            .map_err(|e| PkinitError::Asn1(format!("decode ephemeralKeyParameters: {e}")))?;
 
     Ok(alg_ids
         .iter()

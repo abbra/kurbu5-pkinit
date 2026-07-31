@@ -1,10 +1,9 @@
-
 use kurbu5_rs::clpreauth::*;
 use kurbu5_rs::{Krb5Error, PluginContext};
 use pkinit_core::client::PkinitClientState;
 use pkinit_core::config::PkinitClientConfig;
 use pkinit_core::constants::{
-    KRB5_PREAUTH_FAILED, PA_AS_FRESHNESS, PA_PKINIT_KX, PA_PK_AS_REP, PA_PK_AS_REQ,
+    KRB5_PREAUTH_FAILED, PA_AS_FRESHNESS, PA_PK_AS_REP, PA_PK_AS_REQ, PA_PKINIT_KX,
 };
 use pkinit_core::identity::{IdentitySource, PkinitIdentity, TrustStore};
 
@@ -46,7 +45,11 @@ impl ClpreauthModule for PkinitClient {
         _callbacks: &mut ClpreauthCallbacks<'_>,
         req: &EtypeInfoRequest<'_>,
     ) -> Result<(), Krb5Error> {
-        if self.state.as_ref().is_some_and(|s| s.has_dh_key() || s.has_kem_key()) {
+        if self
+            .state
+            .as_ref()
+            .is_some_and(|s| s.has_dh_key() || s.has_kem_key())
+        {
             return Ok(());
         }
 
@@ -232,10 +235,7 @@ impl ClpreauthModule for PkinitClient {
                 self.config.anchors.push(value.to_string());
             }
             "disable_freshness"
-                if matches!(
-                    value.to_ascii_lowercase().as_str(),
-                    "yes" | "true" | "1"
-                ) =>
+                if matches!(value.to_ascii_lowercase().as_str(), "yes" | "true" | "1") =>
             {
                 pkinit_trace!(ctx, "PKINIT received -X {}={}", attr, value);
                 self.config.disable_freshness = true;

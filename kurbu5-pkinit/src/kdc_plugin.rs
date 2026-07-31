@@ -9,8 +9,8 @@ use kurbu5_rs::{
 use pkinit_core::certauth;
 use pkinit_core::config::PkinitKdcConfig;
 use pkinit_core::constants::{
-    ENCTYPE_AES256_CTS_HMAC_SHA1_96, KRB5_KEYUSAGE_PA_PKINIT_KX, PA_PKINIT_KX, PA_PK_AS_REP,
-    PA_PK_AS_REQ,
+    ENCTYPE_AES256_CTS_HMAC_SHA1_96, KRB5_KEYUSAGE_PA_PKINIT_KX, PA_PK_AS_REP, PA_PK_AS_REQ,
+    PA_PKINIT_KX,
 };
 use pkinit_core::identity::{IdentitySource, PkinitIdentity, TrustStore};
 use pkinit_core::server::{PkinitKdcState, VerifiedRequest};
@@ -123,18 +123,17 @@ impl KdcpreauthModule for PkinitKdc {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        let verified =
-            match self
-                .state
-                .verify_as_req(pa_contents, None, max_skew, current_time)
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    pkinit_trace!(ctx, "PKINIT server failed to verify PA data: {}", e);
-                    respond(VerifyResponse::err(libc::EINVAL));
-                    return;
-                }
-            };
+        let verified = match self
+            .state
+            .verify_as_req(pa_contents, None, max_skew, current_time)
+        {
+            Ok(v) => v,
+            Err(e) => {
+                pkinit_trace!(ctx, "PKINIT server failed to verify PA data: {}", e);
+                respond(VerifyResponse::err(libc::EINVAL));
+                return;
+            }
+        };
 
         if !verified.is_anonymous {
             for indicator in &self.config.auth_indicators {
@@ -175,7 +174,10 @@ impl PkinitKdc {
             .ok_or(Krb5Error::Custom(libc::EINVAL))?;
 
         let nonce = modreq.verified.nonce;
-        let enctype = callbacks.fast_armor().map(|k| k.enctype).unwrap_or(ENCTYPE_AES256_CTS_HMAC_SHA1_96);
+        let enctype = callbacks
+            .fast_armor()
+            .map(|k| k.enctype)
+            .unwrap_or(ENCTYPE_AES256_CTS_HMAC_SHA1_96);
 
         let o2k = Krb5OctetString2Key::new(ctx);
 
