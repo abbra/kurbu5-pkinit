@@ -66,6 +66,7 @@ class PkinitRealm:
         self.kdc_conf = os.path.join(self.testdir, "kdc.conf")
         self.kdc_log = os.path.join(self.testdir, "kdc.log")
         self.kdc_trace = os.path.join(self.testdir, "kdc-trace.log")
+        self.client_trace = os.path.join(self.testdir, "client-trace.log")
         self.db_path = os.path.join(self.testdir, "db")
         self.acl_file = os.path.join(self.testdir, "acl")
         self.stash = os.path.join(self.testdir, "stash")
@@ -90,8 +91,13 @@ class PkinitRealm:
         e["KRB5_KDC_PROFILE"] = self.kdc_conf
         e["KRB5CCNAME"] = f"FILE:{self.ccache}"
         e["KRB5RCACHEDIR"] = self.testdir
-        # Surfaces pkinit_trace!() output from our own plugin (client_plugin.rs,
-        # kdc_plugin.rs) plus MIT krb5's own internal preauth trace messages.
+        # KDC-side trace only: surfaces pkinit_trace!() output from
+        # kdc_plugin.rs plus MIT krb5's own internal KDC preauth trace
+        # messages. This `env` property is used to launch the krb5kdc
+        # process (and kdb5_util/kadmin.local) -- kinit/klist invocations
+        # get their own KRB5_TRACE (self.client_trace) via the env-file
+        # written by main(), so KDC and client traces never land in the
+        # same file and interleave.
         e["KRB5_TRACE"] = self.kdc_trace
         return e
 
@@ -493,10 +499,16 @@ def main():
     # Anonymous PKINIT principal
     realm.addprinc(f"WELLKNOWN/ANONYMOUS@{args.realm}")
 
+    # KRB5_TRACE is overridden below to realm.client_trace: kinit/klist run
+    # under this env-file and must not write into the KDC's own trace file
+    # (realm.kdc_trace, used by realm.env to launch krb5kdc), or KDC-side
+    # and client-side trace lines interleave in one file with no way to
+    # tell them apart.
     env_lines = "\n".join(
         f'export {k}="{v}"' for k, v in realm.env.items()
-        if k.startswith("KRB5")
+        if k.startswith("KRB5") and k != "KRB5_TRACE"
     )
+    env_lines += f'\nexport KRB5_TRACE="{realm.client_trace}"'
     env_lines += f'\nexport PKINIT_CLIENT_CERT="{realm.client_cert}"'
     env_lines += f'\nexport PKINIT_CLIENT_KEY="{realm.client_key}"'
     env_lines += f'\nexport PKINIT_CA_CERT="{realm.ca_cert}"'

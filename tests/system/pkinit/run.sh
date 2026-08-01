@@ -53,10 +53,11 @@ where
                             ML-KEM-768-X25519, ML-KEM-768-ECDH-P256,
                             ML-KEM-1024-ECDH-P384]
                            (default: unset -- classic DH/ECDH path)
-  --show-trace         -- print the KDC log and KRB5_TRACE output for every
-                           combo, not just failed ones. KRB5_TRACE is always
-                           collected to a file regardless of this flag; a
-                           failed combo always shows its trace either way.
+  --show-trace         -- print the KDC log and the separate KDC-side and
+                           client-side KRB5_TRACE output for every combo,
+                           not just failed ones. Both traces are always
+                           collected to their own files regardless of this
+                           flag; a failed combo always shows them either way.
 
 MIT combinations skipped if pkinit.so is not available
 END
@@ -227,18 +228,23 @@ run_combo() {
         echo "$ANON_KLIST"
     fi
 
-    # KRB5_TRACE is always collected to a file by setup.py, regardless of
-    # --show-trace -- it's sourced from ENV_FILE above and covers both the
-    # KDC process and the kinit invocations above, so it carries
-    # pkinit_trace!() output from whichever side (client or KDC) is
-    # involved. Only whether we *print* it here is conditional: on
-    # --show-trace, or unconditionally whenever this combo failed.
+    # Trace files are always collected by setup.py, regardless of
+    # --show-trace: the KDC process traces to $TESTDIR/kdc/kdc-trace.log
+    # and kinit/klist (via ENV_FILE's KRB5_TRACE, sourced above) trace to
+    # $TESTDIR/kdc/client-trace.log -- two separate files so KDC-side and
+    # client-side pkinit_trace!() output never interleave in one log with
+    # no way to tell them apart. Only whether we *print* them here is
+    # conditional: on --show-trace, or unconditionally whenever this combo
+    # failed.
     if [[ "$SHOW_TRACE" == true || $TOTAL_FAIL -gt $FAIL_BEFORE ]]; then
         echo
         echo "  [$combo] KDC log:"
         cat "$TESTDIR/kdc/kdc.log" 2>/dev/null || true
         echo
-        echo "  [$combo] KRB5_TRACE:"
+        echo "  [$combo] KDC trace:"
+        cat "$TESTDIR/kdc/kdc-trace.log" 2>/dev/null || true
+        echo
+        echo "  [$combo] Client trace:"
         cat "${KRB5_TRACE:-}" 2>/dev/null || true
     fi
 
