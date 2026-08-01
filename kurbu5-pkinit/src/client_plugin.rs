@@ -133,7 +133,7 @@ impl ClpreauthModule for PkinitClient {
                     let _ = state.process_pkinit_hint(&hint_contents);
                 }
 
-                pkinit_trace!(ctx, "PKINIT client making DH request");
+                pkinit_trace!(ctx, "PKINIT client building AS-REQ");
 
                 let nonce = unsafe { (*req.request).nonce };
                 let (ctime, cusec) = callbacks.get_preauth_time(true)?;
@@ -148,6 +148,10 @@ impl ClpreauthModule for PkinitClient {
                         pkinit_trace!(ctx, "PKINIT client failed to build AS-REQ: {}", e);
                         Krb5Error::Custom(libc::EINVAL)
                     })?;
+
+                if let Some(key_exchange) = state.key_exchange() {
+                    pkinit_trace!(ctx, "PKINIT client selected {}", key_exchange);
+                }
 
                 Ok(vec![PaData::new(PA_PK_AS_REQ, pa_req_der)])
             }
@@ -197,7 +201,12 @@ impl ClpreauthModule for PkinitClient {
                         pkinit_trace!(ctx, "PKINIT client could not verify reply: {}", e);
                         Krb5Error::Custom(libc::EINVAL)
                     })?;
-                pkinit_trace!(ctx, "PKINIT client verified DH reply");
+                match state.key_exchange() {
+                    Some(key_exchange) => {
+                        pkinit_trace!(ctx, "PKINIT client verified AS-REP via {}", key_exchange)
+                    }
+                    None => pkinit_trace!(ctx, "PKINIT client verified AS-REP"),
+                }
 
                 let key_bytes = derived.key_data.as_ref();
                 let mut keyblock = kurbu5_sys::krb5_keyblock {
