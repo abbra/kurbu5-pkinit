@@ -21,6 +21,22 @@ impl DhGroup {
     pub fn is_ec(self) -> bool {
         matches!(self, Self::EcP256 | Self::EcP384 | Self::EcP521)
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Oakley2048 => "DH-2048",
+            Self::Oakley4096 => "DH-4096",
+            Self::EcP256 => "ECDH-P256",
+            Self::EcP384 => "ECDH-P384",
+            Self::EcP521 => "ECDH-P521",
+        }
+    }
+}
+
+impl std::fmt::Display for DhGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -158,6 +174,32 @@ impl KemAlgorithm {
             .into_iter()
             .filter(|a| a.strength_order() >= min)
             .collect()
+    }
+}
+
+impl std::fmt::Display for KemAlgorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.parameter_set_name())
+    }
+}
+
+/// The key-establishment path negotiated for a given PKINIT exchange, and
+/// the specific algorithm/group chosen within it.
+///
+/// Shared by client and server so both sides (and, ultimately, the krb5
+/// plugin layer's tracing) can report the same value the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyExchangeType {
+    Dh(DhGroup),
+    Kem(KemAlgorithm),
+}
+
+impl std::fmt::Display for KeyExchangeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dh(group) => write!(f, "{group}"),
+            Self::Kem(alg) => write!(f, "{alg}"),
+        }
     }
 }
 

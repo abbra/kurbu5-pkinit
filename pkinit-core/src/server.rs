@@ -2,6 +2,7 @@ use synta::{OctetStringRef, ToDer};
 
 use crate::certauth;
 use crate::config::PkinitKdcConfig;
+pub use crate::constants::KeyExchangeType;
 use crate::constants::{DhGroup, KemAlgorithm};
 use crate::crypto::checksum;
 use crate::crypto::cms;
@@ -9,12 +10,6 @@ use crate::crypto::dh::{self, DhKeyPair};
 use crate::crypto::kdf::{self, DerivedKey, OctetString2Key, encode_principal_for_kdf};
 use crate::error::PkinitError;
 use crate::identity::{PkinitIdentity, TrustStore};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyExchangeType {
-    Dh(DhGroup),
-    Kem(KemAlgorithm),
-}
 
 #[derive(Debug)]
 pub struct VerifiedRequest {

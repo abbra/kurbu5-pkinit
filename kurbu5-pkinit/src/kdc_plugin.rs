@@ -138,6 +138,8 @@ impl KdcpreauthModule for PkinitKdc {
             }
         };
 
+        pkinit_trace!(ctx, "PKINIT server negotiated {}", verified.key_exchange);
+
         if !verified.is_anonymous {
             for indicator in &self.config.auth_indicators {
                 let _ = callbacks.add_auth_indicator(indicator);

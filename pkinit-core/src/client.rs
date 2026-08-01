@@ -2,7 +2,7 @@ use synta::{GeneralizedTime, OctetStringRef, ToDer};
 
 use crate::certauth;
 use crate::config::PkinitClientConfig;
-use crate::constants::{self, DhGroup, KemAlgorithm};
+use crate::constants::{self, DhGroup, KemAlgorithm, KeyExchangeType};
 use crate::crypto::checksum;
 use crate::crypto::cms;
 use crate::crypto::dh::{self, DhKeyPair};
@@ -38,6 +38,13 @@ pub struct PkinitClientState {
     dh_nonce: Option<Vec<u8>>,
     kdc_principal: Option<String>,
     kdc_hostname: Option<String>,
+    /// The key-establishment path and algorithm chosen for the most recent
+    /// `build_as_req` call. Set once per exchange and left in place through
+    /// the matching `process_as_rep` call, so callers (the krb5 plugin's
+    /// tracing) can report it at either point without re-deriving it from
+    /// `dh_key`/`kem_key`, whose presence changes independently (e.g.
+    /// `process_kem_rep` consumes `kem_key` via `take()`).
+    key_exchange: Option<KeyExchangeType>,
 }
 
 impl PkinitClientState {
@@ -56,6 +63,7 @@ impl PkinitClientState {
             dh_nonce: None,
             kdc_principal: None,
             kdc_hostname: None,
+            key_exchange: None,
         }
     }
 
@@ -65,6 +73,12 @@ impl PkinitClientState {
 
     pub fn has_kem_key(&self) -> bool {
         self.kem_key.is_some()
+    }
+
+    /// The key-establishment path and algorithm chosen by the most recent
+    /// `build_as_req` call, or `None` before the first request is built.
+    pub fn key_exchange(&self) -> Option<KeyExchangeType> {
+        self.key_exchange
     }
 
     pub fn has_pq_certificate(&self) -> bool {
@@ -140,11 +154,13 @@ impl PkinitClientState {
 
         let client_spki_der = if use_kem {
             let kem_alg = self.config.kem_algorithm.unwrap();
+            self.key_exchange = Some(KeyExchangeType::Kem(kem_alg));
             if self.kem_key.is_none() {
                 self.kem_key = Some(KemKeyPair::generate(kem_alg)?);
             }
             self.kem_key.as_ref().unwrap().public_key_spki_der()?
         } else {
+            self.key_exchange = Some(KeyExchangeType::Dh(self.config.dh_group));
             if self.dh_key.is_none() {
                 self.dh_key = Some(DhKeyPair::generate(self.config.dh_group)?);
             }
