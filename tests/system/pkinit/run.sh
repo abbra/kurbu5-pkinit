@@ -26,6 +26,7 @@ MIT_PKINIT_SO="${MIT_PKINIT_SO:-/usr/lib64/krb5/plugins/preauth/pkinit.so}"
 COMBO_ARG="all"
 KEY_TYPE="ec:P-256"
 PQC_MIN_ALGORITHM=""
+SHOW_TRACE=false
 TOTAL_PASS=0
 TOTAL_FAIL=0
 TOTAL_SKIP=0
@@ -37,7 +38,7 @@ display_help() {
 # values the plugin currently recognizes; anything else is silently ignored.
 local message=$(cat <<-END
 Usage:
-$(basename $0) [--combo combo] [--key-type type] [--pqc-min-algorithm alg]
+$(basename $0) [--combo combo] [--key-type type] [--pqc-min-algorithm alg] [--show-trace]
 
 where
   --combo combo        -- combination to run [us-us, us-mit, mit-us, mit-mit]
@@ -52,6 +53,10 @@ where
                             ML-KEM-768-X25519, ML-KEM-768-ECDH-P256,
                             ML-KEM-1024-ECDH-P384]
                            (default: unset -- classic DH/ECDH path)
+  --show-trace         -- print the KDC log and KRB5_TRACE output for every
+                           combo, not just failed ones. KRB5_TRACE is always
+                           collected to a file regardless of this flag; a
+                           failed combo always shows its trace either way.
 
 MIT combinations skipped if pkinit.so is not available
 END
@@ -66,6 +71,7 @@ while [[ $# -gt 0 ]]; do
         --combo) COMBO_ARG="$2"; shift 2 ;;
         --key-type) KEY_TYPE="$2"; shift 2 ;;
         --pqc-min-algorithm) PQC_MIN_ALGORITHM="$2"; shift 2 ;;
+        --show-trace) SHOW_TRACE=true; shift ;;
         --help) display_help ; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -221,11 +227,13 @@ run_combo() {
         echo "$ANON_KLIST"
     fi
 
-    # Dump KDC log and KRB5_TRACE output on per-combo failure. KRB5_TRACE is
-    # sourced from ENV_FILE and covers both the KDC process and the kinit
-    # invocations above, so it carries pkinit_trace!() output from whichever
-    # side (client or KDC) actually failed.
-    if [[ $TOTAL_FAIL -gt $FAIL_BEFORE ]]; then
+    # KRB5_TRACE is always collected to a file by setup.py, regardless of
+    # --show-trace -- it's sourced from ENV_FILE above and covers both the
+    # KDC process and the kinit invocations above, so it carries
+    # pkinit_trace!() output from whichever side (client or KDC) is
+    # involved. Only whether we *print* it here is conditional: on
+    # --show-trace, or unconditionally whenever this combo failed.
+    if [[ "$SHOW_TRACE" == true || $TOTAL_FAIL -gt $FAIL_BEFORE ]]; then
         echo
         echo "  [$combo] KDC log:"
         cat "$TESTDIR/kdc/kdc.log" 2>/dev/null || true
