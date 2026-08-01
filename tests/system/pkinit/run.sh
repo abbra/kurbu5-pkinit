@@ -30,6 +30,35 @@ TOTAL_PASS=0
 TOTAL_FAIL=0
 TOTAL_SKIP=0
 
+display_help() {
+# Key types: keep in sync with SUPPORTED_KEY_TYPES in setup.py.
+# PQC algorithms: keep in sync with KemAlgorithm::from_name in
+# pkinit-core/src/constants.rs -- these are the only pkinit_pqc_min_algorithm
+# values the plugin currently recognizes; anything else is silently ignored.
+local message=$(cat <<-END
+Usage:
+$(basename $0) [--combo combo] [--key-type type] [--pqc-min-algorithm alg]
+
+where
+  --combo combo        -- combination to run [us-us, us-mit, mit-us, mit-mit]
+  --key-type key       -- algorithm to use for certificate generation
+                           [ec:P-256, ec:P-384, ec:P-521,
+                            rsa:2048, rsa:3072, rsa:4096,
+                            mldsa44, mldsa65, mldsa87]
+                           (default: ec:P-256)
+  --pqc-min-algorithm  -- minimal PQC algorithm to require; enables the KEM
+                           path instead of DH/ECDH when set
+                           [ML-KEM-512, ML-KEM-768, ML-KEM-1024,
+                            ML-KEM-768-X25519, ML-KEM-768-ECDH-P256,
+                            ML-KEM-1024-ECDH-P384]
+                           (default: unset -- classic DH/ECDH path)
+
+MIT combinations skipped if pkinit.so is not available
+END
+)
+echo -e "$message"
+}
+
 # -- Argument parsing --
 
 while [[ $# -gt 0 ]]; do
@@ -37,6 +66,7 @@ while [[ $# -gt 0 ]]; do
         --combo) COMBO_ARG="$2"; shift 2 ;;
         --key-type) KEY_TYPE="$2"; shift 2 ;;
         --pqc-min-algorithm) PQC_MIN_ALGORITHM="$2"; shift 2 ;;
+        --help) display_help ; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
