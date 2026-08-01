@@ -9,13 +9,14 @@ pub struct KemKeyPair {
 
 impl KemKeyPair {
     pub fn generate(algorithm: KemAlgorithm) -> Result<Self, PkinitError> {
-        let private_key = BackendPrivateKey::generate_ml_kem(algorithm.parameter_set_name())
-            .map_err(|e| {
-                PkinitError::KemEncapFailed(format!(
-                    "generate {}: {e}",
-                    algorithm.parameter_set_name()
-                ))
-            })?;
+        let private_key = if let Some(sub_arc) = algorithm.composite_sub_arc() {
+            BackendPrivateKey::generate_composite_kem(sub_arc)
+        } else {
+            BackendPrivateKey::generate_ml_kem(algorithm.parameter_set_name())
+        }
+        .map_err(|e| {
+            PkinitError::KemEncapFailed(format!("generate {}: {e}", algorithm.parameter_set_name()))
+        })?;
         Ok(Self {
             algorithm,
             private_key,
@@ -45,8 +46,12 @@ impl KemKeyPair {
                 actual: ciphertext.len(),
             });
         }
-        self.private_key
-            .ml_kem_decapsulate(ciphertext)
+        let result = if self.algorithm.is_composite() {
+            self.private_key.composite_kem_decapsulate(ciphertext)
+        } else {
+            self.private_key.ml_kem_decapsulate(ciphertext)
+        };
+        result
             .map(native_ossl::util::SecretBuf::new)
             .map_err(|e| PkinitError::KemDecapFailed(format!("{e}")))
     }
@@ -60,7 +65,12 @@ pub fn encapsulate_for_client(
     algorithm: KemAlgorithm,
 ) -> Result<(Vec<u8>, native_ossl::util::SecretBuf), PkinitError> {
     let pub_key = BackendPublicKey::from_spki_der(client_spki_der.to_vec());
-    let (ciphertext, shared_secret) = pub_key.ml_kem_encapsulate().map_err(|e| {
+    let (ciphertext, shared_secret) = if algorithm.is_composite() {
+        pub_key.composite_kem_encapsulate()
+    } else {
+        pub_key.ml_kem_encapsulate()
+    }
+    .map_err(|e| {
         PkinitError::KemEncapFailed(format!(
             "encapsulate {}: {e}",
             algorithm.parameter_set_name()
@@ -126,6 +136,45 @@ mod tests {
 
         let (ct, ss) = encapsulate_for_client(&spki, KemAlgorithm::MlKem1024).unwrap();
         assert_eq!(ct.len(), KemAlgorithm::MlKem1024.ciphertext_len());
+
+        let recovered = kp.decapsulate(&ct).unwrap();
+        assert_eq!(recovered.as_ref(), ss.as_ref());
+    }
+
+    #[test]
+    fn kem_roundtrip_composite_mlkem768_x25519() {
+        let kp = KemKeyPair::generate(KemAlgorithm::MlKem768X25519).unwrap();
+        let spki = kp.public_key_spki_der().unwrap();
+
+        let (ct, ss) = encapsulate_for_client(&spki, KemAlgorithm::MlKem768X25519).unwrap();
+        assert_eq!(ct.len(), KemAlgorithm::MlKem768X25519.ciphertext_len());
+        assert_eq!(ss.as_ref().len(), 32);
+
+        let recovered = kp.decapsulate(&ct).unwrap();
+        assert_eq!(recovered.as_ref(), ss.as_ref());
+    }
+
+    #[test]
+    fn kem_roundtrip_composite_mlkem768_ecdh_p256() {
+        let kp = KemKeyPair::generate(KemAlgorithm::MlKem768EcdhP256).unwrap();
+        let spki = kp.public_key_spki_der().unwrap();
+
+        let (ct, ss) = encapsulate_for_client(&spki, KemAlgorithm::MlKem768EcdhP256).unwrap();
+        assert_eq!(ct.len(), KemAlgorithm::MlKem768EcdhP256.ciphertext_len());
+        assert_eq!(ss.as_ref().len(), 32);
+
+        let recovered = kp.decapsulate(&ct).unwrap();
+        assert_eq!(recovered.as_ref(), ss.as_ref());
+    }
+
+    #[test]
+    fn kem_roundtrip_composite_mlkem1024_ecdh_p384() {
+        let kp = KemKeyPair::generate(KemAlgorithm::MlKem1024EcdhP384).unwrap();
+        let spki = kp.public_key_spki_der().unwrap();
+
+        let (ct, ss) = encapsulate_for_client(&spki, KemAlgorithm::MlKem1024EcdhP384).unwrap();
+        assert_eq!(ct.len(), KemAlgorithm::MlKem1024EcdhP384.ciphertext_len());
+        assert_eq!(ss.as_ref().len(), 32);
 
         let recovered = kp.decapsulate(&ct).unwrap();
         assert_eq!(recovered.as_ref(), ss.as_ref());

@@ -28,6 +28,12 @@ pub enum KemAlgorithm {
     MlKem512,
     MlKem768,
     MlKem1024,
+    /// Composite ML-KEM (draft-ietf-lamps-pq-composite-kem), sub-arc 58.
+    MlKem768X25519,
+    /// Composite ML-KEM (draft-ietf-lamps-pq-composite-kem), sub-arc 59.
+    MlKem768EcdhP256,
+    /// Composite ML-KEM (draft-ietf-lamps-pq-composite-kem), sub-arc 63.
+    MlKem1024EcdhP384,
 }
 
 impl KemAlgorithm {
@@ -36,6 +42,28 @@ impl KemAlgorithm {
             Self::MlKem512 => "ML-KEM-512",
             Self::MlKem768 => "ML-KEM-768",
             Self::MlKem1024 => "ML-KEM-1024",
+            Self::MlKem768X25519 => "ML-KEM-768-X25519",
+            Self::MlKem768EcdhP256 => "ML-KEM-768-ECDH-P256",
+            Self::MlKem1024EcdhP384 => "ML-KEM-1024-ECDH-P384",
+        }
+    }
+
+    /// Whether this is a composite ML-KEM variant (as opposed to pure ML-KEM).
+    pub fn is_composite(self) -> bool {
+        matches!(
+            self,
+            Self::MlKem768X25519 | Self::MlKem768EcdhP256 | Self::MlKem1024EcdhP384
+        )
+    }
+
+    /// Composite OID sub-arc (58, 59, or 63) under
+    /// `synta_certificate::oids::COMPOSITE_KEM_ARC`, or `None` for pure ML-KEM.
+    pub fn composite_sub_arc(self) -> Option<u32> {
+        match self {
+            Self::MlKem768X25519 => Some(58),
+            Self::MlKem768EcdhP256 => Some(59),
+            Self::MlKem1024EcdhP384 => Some(63),
+            _ => None,
         }
     }
 
@@ -44,6 +72,10 @@ impl KemAlgorithm {
             Self::MlKem512 => 768,
             Self::MlKem768 => 1088,
             Self::MlKem1024 => 1568,
+            // Composite ciphertext = mlkemCT || tradCT (raw concatenation).
+            Self::MlKem768X25519 => 1088 + 32,
+            Self::MlKem768EcdhP256 => 1088 + 65,
+            Self::MlKem1024EcdhP384 => 1568 + 97,
         }
     }
 
@@ -52,6 +84,10 @@ impl KemAlgorithm {
             Self::MlKem512 => 800,
             Self::MlKem768 => 1184,
             Self::MlKem1024 => 1568,
+            // Composite public key = mlkemPK || tradPK (raw concatenation).
+            Self::MlKem768X25519 => 1184 + 32,
+            Self::MlKem768EcdhP256 => 1184 + 65,
+            Self::MlKem1024EcdhP384 => 1568 + 97,
         }
     }
 
@@ -64,6 +100,9 @@ impl KemAlgorithm {
             Self::MlKem512 => ID_ML_KEM_512,
             Self::MlKem768 => ID_ML_KEM_768,
             Self::MlKem1024 => ID_ML_KEM_1024,
+            Self::MlKem768X25519 => ID_MLKEM768_X25519_SHA3_256,
+            Self::MlKem768EcdhP256 => ID_MLKEM768_ECDH_P256_SHA3_256,
+            Self::MlKem1024EcdhP384 => ID_MLKEM1024_ECDH_P384_SHA3_256,
         }
     }
 
@@ -74,6 +113,12 @@ impl KemAlgorithm {
             Some(Self::MlKem768)
         } else if oid == ID_ML_KEM_1024 {
             Some(Self::MlKem1024)
+        } else if oid == ID_MLKEM768_X25519_SHA3_256 {
+            Some(Self::MlKem768X25519)
+        } else if oid == ID_MLKEM768_ECDH_P256_SHA3_256 {
+            Some(Self::MlKem768EcdhP256)
+        } else if oid == ID_MLKEM1024_ECDH_P384_SHA3_256 {
+            Some(Self::MlKem1024EcdhP384)
         } else {
             None
         }
@@ -84,6 +129,9 @@ impl KemAlgorithm {
             "ml-kem-512" | "mlkem512" => Some(Self::MlKem512),
             "ml-kem-768" | "mlkem768" => Some(Self::MlKem768),
             "ml-kem-1024" | "mlkem1024" => Some(Self::MlKem1024),
+            "ml-kem-768-x25519" | "mlkem768-x25519" => Some(Self::MlKem768X25519),
+            "ml-kem-768-ecdh-p256" | "mlkem768-ecdh-p256" => Some(Self::MlKem768EcdhP256),
+            "ml-kem-1024-ecdh-p384" | "mlkem1024-ecdh-p384" => Some(Self::MlKem1024EcdhP384),
             _ => None,
         }
     }
@@ -93,9 +141,17 @@ impl KemAlgorithm {
             Self::MlKem512 => 1,
             Self::MlKem768 => 3,
             Self::MlKem1024 => 5,
+            Self::MlKem768X25519 => 3,
+            Self::MlKem768EcdhP256 => 3,
+            Self::MlKem1024EcdhP384 => 5,
         }
     }
 
+    /// Pure ML-KEM variants at or above this algorithm's NIST security
+    /// category. Scoped to the pure ladder only — composite variants are
+    /// explicit opt-in (`PkinitKdcConfig::supported_composite_kem_algorithms`)
+    /// since a category-floor policy doesn't map cleanly onto them (each
+    /// composite pairs a specific traditional algorithm, not just a strength).
     pub fn algorithms_at_or_above(self) -> Vec<Self> {
         let min = self.strength_order();
         [Self::MlKem512, Self::MlKem768, Self::MlKem1024]
@@ -116,6 +172,11 @@ pub use synta_krb5::pkinit::{
 pub use synta_certificate::oids::ML_KEM_512 as ID_ML_KEM_512;
 pub use synta_certificate::oids::ML_KEM_768 as ID_ML_KEM_768;
 pub use synta_certificate::oids::ML_KEM_1024 as ID_ML_KEM_1024;
+
+// Composite ML-KEM OIDs (draft-ietf-lamps-pq-composite-kem)
+pub use synta_certificate::oids::MLKEM768_ECDH_P256_SHA3_256 as ID_MLKEM768_ECDH_P256_SHA3_256;
+pub use synta_certificate::oids::MLKEM768_X25519_SHA3_256 as ID_MLKEM768_X25519_SHA3_256;
+pub use synta_certificate::oids::MLKEM1024_ECDH_P384_SHA3_256 as ID_MLKEM1024_ECDH_P384_SHA3_256;
 
 // HKDF OID for KEM path KDF
 pub use synta_certificate::hkdf_oid_2019_types::ID_ALG_HKDF_WITH_SHA512;
