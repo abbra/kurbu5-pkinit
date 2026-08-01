@@ -229,6 +229,43 @@ class PkinitRealm:
         if not os.path.isfile(self.client_plugin_so):
             raise RuntimeError(f"Client plugin .so not found: {self.client_plugin_so}")
         os.makedirs(self.plugins_dir, exist_ok=True)
+        self._link_system_preauth_plugins()
+
+    @staticmethod
+    def _find_system_preauth_dir():
+        candidates = [
+            "/usr/lib64/krb5/plugins/preauth",
+            "/usr/lib/krb5/plugins/preauth",
+            "/usr/lib/x86_64-linux-gnu/krb5/plugins/preauth",
+            "/usr/lib/aarch64-linux-gnu/krb5/plugins/preauth",
+        ]
+        for d in candidates:
+            if os.path.isdir(d):
+                return d
+        return None
+
+    def _link_system_preauth_plugins(self):
+        """Symlink MIT's built-in preauth plugins (spake.so, otp.so, ...) into
+        our redirected plugin_base_dir.
+
+        [libdefaults] plugin_base_dir below points krb5 at self.plugins_dir
+        for *all* dynamically-loaded plugins, not just ours -- so without
+        this, the KDC and client both try (and fail) to autoload every
+        preauth mechanism MIT ships by default from
+        {plugin_base_dir}/preauth/, logging a spurious "unable to load
+        plugin" error for each one on every exchange.
+        """
+        system_preauth_dir = self._find_system_preauth_dir()
+        if not system_preauth_dir:
+            return
+        preauth_dir = os.path.join(self.plugins_dir, "preauth")
+        os.makedirs(preauth_dir, exist_ok=True)
+        for name in os.listdir(system_preauth_dir):
+            if not name.endswith(".so"):
+                continue
+            link = os.path.join(preauth_dir, name)
+            if not os.path.exists(link):
+                os.symlink(os.path.join(system_preauth_dir, name), link)
 
     # -- System KDB module detection --
 
