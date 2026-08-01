@@ -16,6 +16,7 @@ pub enum KeyExchangeType {
     Kem(KemAlgorithm),
 }
 
+#[derive(Debug)]
 pub struct VerifiedRequest {
     pub client_cert_der: Vec<u8>,
     pub client_dh_public: Vec<u8>,
@@ -49,45 +50,157 @@ impl PkinitKdcState {
         }
     }
 
+    /// Proactive advertisement (`PA-PK-AS-REQ-Hint.ephemeralKeyParameters`,
+    /// {{sec-proactive-adv}}): KEM and composite KEM algorithms only.  DH/ECDH
+    /// groups are omitted here — the current client only consumes KEM OIDs
+    /// from this hint, and meaningfully advertising a DH/ECDH group requires
+    /// embedding real domain parameters, which is already done on the
+    /// reactive path in [`Self::build_td_ephemeral_key_params`].
     pub fn build_supported_algorithms_hint(&self) -> Result<Vec<u8>, PkinitError> {
         let mut oids: Vec<&[u32]> = Vec::new();
-        for alg in &self.config.supported_kem_algorithms {
+        for alg in self
+            .config
+            .supported_kem_algorithms
+            .iter()
+            .chain(&self.config.supported_composite_kem_algorithms)
+        {
             oids.push(alg.oid());
         }
         crate::kem_types::encode_pkinit_hint(&oids)
     }
 
+    /// `TD-EPHEMERAL-KEY-PARAMETERS-DATA` ({{sec-ephemeral-key-errors}}):
+    /// every key-establishment algorithm this KDC currently accepts — KEM,
+    /// composite KEM, and DH/ECDH groups at or above `dh_min_bits` — each
+    /// with real parameters so the client's retry logic
+    /// (`PkinitClientState::handle_tryagain`) can act on them directly, per
+    /// {{RFC4556}} Section 3.2.2.
     pub fn build_td_ephemeral_key_params(&self) -> Result<Vec<u8>, PkinitError> {
-        use synta::Encode;
+        let entries = self.acceptable_key_establishment_algorithm_ders()?;
+        let mut content = Vec::new();
+        for entry in &entries {
+            content.extend_from_slice(entry);
+        }
+        let mut out = Vec::with_capacity(4 + content.len());
+        out.push(0x30); // SEQUENCE
+        crate::kem_types::der_encode_length(content.len(), &mut out);
+        out.extend_from_slice(&content);
+        Ok(out)
+    }
 
-        let mut oids: Vec<&[u32]> = Vec::new();
-        for alg in &self.config.supported_kem_algorithms {
-            oids.push(alg.oid());
+    /// DER-encode each acceptable `AlgorithmIdentifier` individually (KEM +
+    /// composite KEM with absent parameters per {{sec-alg-id-encoding}}; DH
+    /// groups and EC curves with their real domain parameters).  Returned as
+    /// separate DER blobs so the caller can concatenate them into a
+    /// `SEQUENCE OF AlgorithmIdentifier` without further ASN.1 tooling.
+    fn acceptable_key_establishment_algorithm_ders(&self) -> Result<Vec<Vec<u8>>, PkinitError> {
+        use synta::{Encode, ObjectIdentifier};
+        use synta_certificate::AlgorithmIdentifier;
+
+        let mut ders = Vec::new();
+
+        for alg in self
+            .config
+            .supported_kem_algorithms
+            .iter()
+            .chain(&self.config.supported_composite_kem_algorithms)
+        {
+            let oid = ObjectIdentifier::new(alg.oid())
+                .map_err(|e| PkinitError::Asn1(format!("KEM OID: {e}")))?;
+            let alg_id = AlgorithmIdentifier {
+                algorithm: oid,
+                parameters: None,
+            };
+            let mut enc = synta::Encoder::new(synta::Encoding::Der);
+            alg_id
+                .encode(&mut enc)
+                .map_err(|e| PkinitError::Asn1(format!("encode KEM alg id: {e}")))?;
+            ders.push(
+                enc.finish()
+                    .map_err(|e| PkinitError::Asn1(format!("finish KEM alg id: {e}")))?,
+            );
         }
 
-        let obj_oids: Vec<synta::ObjectIdentifier> = oids
-            .iter()
-            .map(|oid| {
-                synta::ObjectIdentifier::new(oid)
-                    .map_err(|e| PkinitError::Asn1(format!("OID: {e}")))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        for group in [
+            DhGroup::Oakley2048,
+            DhGroup::Oakley4096,
+            DhGroup::EcP256,
+            DhGroup::EcP384,
+            DhGroup::EcP521,
+        ] {
+            if group.min_bits() < self.config.dh_min_bits {
+                continue;
+            }
 
-        let alg_ids: Vec<synta_certificate::AlgorithmIdentifier<'_>> = obj_oids
-            .iter()
-            .map(|oid| synta_certificate::AlgorithmIdentifier {
-                algorithm: oid.clone(),
-                parameters: None,
-            })
-            .collect();
+            let alg_id_der = if group.is_ec() {
+                let curve = match group {
+                    DhGroup::EcP256 => synta_krb5::pkix1_algorithms2008::SECP256R1,
+                    DhGroup::EcP384 => synta_krb5::pkix1_algorithms2008::SECP384R1,
+                    DhGroup::EcP521 => synta_krb5::pkix1_algorithms2008::SECP521R1,
+                    _ => unreachable!("non-EC group in EC branch"),
+                };
+                let curve_oid = ObjectIdentifier::new(curve)
+                    .map_err(|e| PkinitError::Asn1(format!("curve OID: {e}")))?;
+                let curve_der = curve_oid
+                    .to_der()
+                    .map_err(|e| PkinitError::Asn1(format!("encode curve OID: {e}")))?;
+                let curve_element: synta::Element<'_> =
+                    synta::Decoder::new(&curve_der, synta::Encoding::Der)
+                        .decode()
+                        .map_err(|e| PkinitError::Asn1(format!("decode curve element: {e}")))?;
+                let alg_id = AlgorithmIdentifier {
+                    algorithm: ObjectIdentifier::new(
+                        synta_krb5::pkix1_algorithms2008::ID_EC_PUBLIC_KEY,
+                    )
+                    .map_err(|e| PkinitError::Asn1(format!("EC OID: {e}")))?,
+                    parameters: Some(curve_element),
+                };
+                let mut enc = synta::Encoder::new(synta::Encoding::Der);
+                alg_id
+                    .encode(&mut enc)
+                    .map_err(|e| PkinitError::Asn1(format!("encode EC alg id: {e}")))?;
+                enc.finish()
+                    .map_err(|e| PkinitError::Asn1(format!("finish EC alg id: {e}")))?
+            } else {
+                let params_der = dh::group_params_der(group)
+                    .ok_or_else(|| PkinitError::DhParamsRejected("unknown DH group".into()))?;
+                let params_element: synta::Element<'_> =
+                    synta::Decoder::new(params_der, synta::Encoding::Der)
+                        .decode()
+                        .map_err(|e| PkinitError::Asn1(format!("decode DH params: {e}")))?;
+                let alg_id = AlgorithmIdentifier {
+                    algorithm: ObjectIdentifier::new(
+                        synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER,
+                    )
+                    .map_err(|e| PkinitError::Asn1(format!("DH OID: {e}")))?,
+                    parameters: Some(params_element),
+                };
+                let mut enc = synta::Encoder::new(synta::Encoding::Der);
+                alg_id
+                    .encode(&mut enc)
+                    .map_err(|e| PkinitError::Asn1(format!("encode DH alg id: {e}")))?;
+                enc.finish()
+                    .map_err(|e| PkinitError::Asn1(format!("finish DH alg id: {e}")))?
+            };
+            ders.push(alg_id_der);
+        }
 
-        let mut encoder = synta::Encoder::new(synta::Encoding::Der);
-        alg_ids
-            .encode(&mut encoder)
-            .map_err(|e| PkinitError::Asn1(format!("encode TD params: {e}")))?;
-        encoder
-            .finish()
-            .map_err(|e| PkinitError::Asn1(format!("finish TD params: {e}")))
+        Ok(ders)
+    }
+
+    /// Whether this KDC currently accepts `alg` on the KEM path.  Composite
+    /// variants are explicit opt-in (`supported_composite_kem_algorithms`);
+    /// pure ML-KEM keeps its pre-existing behavior of accepting any
+    /// recognized algorithm when no floor is configured.
+    fn accepts_kem(&self, alg: KemAlgorithm) -> bool {
+        if alg.is_composite() {
+            self.config
+                .supported_composite_kem_algorithms
+                .contains(&alg)
+        } else {
+            self.config.supported_kem_algorithms.is_empty()
+                || self.config.supported_kem_algorithms.contains(&alg)
+        }
     }
 
     pub fn verify_as_req(
@@ -202,17 +315,13 @@ impl PkinitKdcState {
 
         let key_exchange = match detect_spki_algorithm(&client_dh_public)? {
             Some(kem_alg) => {
-                if !self.config.supported_kem_algorithms.is_empty()
-                    && !self.config.supported_kem_algorithms.contains(&kem_alg)
-                {
+                if !self.accepts_kem(kem_alg) {
                     return Err(PkinitError::KemAlgorithmNotSupported(
                         kem_alg.parameter_set_name().into(),
                     ));
                 }
                 if auth_pack.client_dhnonce.is_some() {
-                    return Err(PkinitError::DhParamsRejected(
-                        "clientDHNonce must be absent for KEM".into(),
-                    ));
+                    return Err(PkinitError::KemNonceNotAllowed);
                 }
                 KeyExchangeType::Kem(kem_alg)
             }
@@ -275,6 +384,20 @@ impl PkinitKdcState {
         use crate::crypto::kem;
         use crate::kem_types::{KdcKemInfo, KemRepInfo, encode_kem_rep_wrapper};
         use synta::OctetString;
+
+        // {{sec-kdf-oids}} / {{sec-kdc-response}} step 3: only HKDF-SHA-512 is
+        // approved for the KEM path. If the client sent supportedKDFs but it
+        // doesn't include the approved KDF, the KDC must not silently
+        // substitute one; RFC 8636's KDC_ERR_NO_ACCEPTABLE_KDF applies. An
+        // absent supportedKDFs defaults to HKDF-SHA-512 (nothing to check).
+        if !verified.supported_kdfs.is_empty()
+            && !verified
+                .supported_kdfs
+                .iter()
+                .any(|kdf| kdf.as_slice() == crate::constants::ID_ALG_HKDF_WITH_SHA512)
+        {
+            return Err(PkinitError::NoAcceptableKdf);
+        }
 
         let (kemct, shared_secret) =
             kem::encapsulate_for_client(&verified.client_dh_public, kem_alg)?;
@@ -676,5 +799,55 @@ mod tests {
 
         assert_eq!(client_key.enctype, server_key.enctype);
         assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
+    }
+
+    #[test]
+    fn build_kem_rep_rejects_unapproved_kdf() {
+        use crate::crypto::kem::KemKeyPair;
+
+        let (_, kdc_id, trust_store) = generate_test_pki();
+        let o2k = MockO2K;
+
+        let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+
+        let kem_kp = KemKeyPair::generate(constants::KemAlgorithm::MlKem768).unwrap();
+        let client_dh_public = kem_kp.public_key_spki_der().unwrap();
+
+        // {{sec-kdf-oids}}: only id-alg-hkdf-with-sha512 is approved for the
+        // KEM path; a client offering only an unapproved KDF must be
+        // rejected with KDC_ERR_NO_ACCEPTABLE_KDF, not silently defaulted.
+        let verified = VerifiedRequest {
+            client_cert_der: vec![],
+            client_dh_public,
+            nonce: 42,
+            supported_kdfs: vec![vec![9, 9, 9]],
+            client_dh_nonce: None,
+            is_anonymous: false,
+            key_exchange: KeyExchangeType::Kem(constants::KemAlgorithm::MlKem768),
+        };
+
+        // `DerivedKey` deliberately doesn't implement `Debug` (it holds key
+        // material via `SecretBuf`), so `unwrap_err()` would fail to compile
+        // here; map the Ok side away first.
+        let err = server
+            .build_as_rep(
+                &verified,
+                &BuildAsRepParams {
+                    nonce: 42,
+                    enctype: 18,
+                    as_req_der: b"mock-as-req",
+                    client_name: "testuser@EXAMPLE.COM",
+                    server_name: "krbtgt/EXAMPLE.COM@EXAMPLE.COM",
+                },
+                &o2k,
+            )
+            .map(|_| ())
+            .unwrap_err();
+
+        assert!(matches!(err, PkinitError::NoAcceptableKdf));
+        assert_eq!(
+            err.kem_error_class(),
+            crate::error::KemErrorClass::NoAcceptableKdf
+        );
     }
 }

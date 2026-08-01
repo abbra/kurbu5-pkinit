@@ -12,6 +12,7 @@ use pkinit_core::constants::{
     ENCTYPE_AES256_CTS_HMAC_SHA1_96, KRB5_KEYUSAGE_PA_PKINIT_KX, PA_PK_AS_REP, PA_PK_AS_REQ,
     PA_PKINIT_KX,
 };
+use pkinit_core::error::{KemErrorClass, PkinitError};
 use pkinit_core::identity::{IdentitySource, PkinitIdentity, TrustStore};
 use pkinit_core::server::{PkinitKdcState, VerifiedRequest};
 
@@ -86,7 +87,9 @@ impl KdcpreauthModule for PkinitKdc {
     ) {
         callbacks.send_freshness_token();
 
-        if self.config.supported_kem_algorithms.is_empty() {
+        if self.config.supported_kem_algorithms.is_empty()
+            && self.config.supported_composite_kem_algorithms.is_empty()
+        {
             respond(Ok(None));
             return;
         }
@@ -130,7 +133,7 @@ impl KdcpreauthModule for PkinitKdc {
             Ok(v) => v,
             Err(e) => {
                 pkinit_trace!(ctx, "PKINIT server failed to verify PA data: {}", e);
-                respond(VerifyResponse::err(libc::EINVAL));
+                respond(self.error_response(&e));
                 return;
             }
         };
@@ -160,7 +163,46 @@ impl KdcpreauthModule for PkinitKdc {
     }
 }
 
+/// `KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED` / `KRB5KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED`
+/// (protocol error 65, {{RFC4556}} / draft-bokovoy-kitten-pkinit-pqc).
+///
+/// This constant is the renamed form of `KRB5KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED`
+/// that this very draft proposes to IANA ({{sec-iana}}); depending on which
+/// `krb5.h` a given build environment has installed, `kurbu5-sys`'s bindgen
+/// output may expose either spelling (both observed across builds in this
+/// tree), while `KRB5KDC_ERR_NO_ACCEPTABLE_KDF` / `KRB5KDC_ERR_PREAUTH_FAILED`
+/// are stable under both. Hardcoding the numeric value (identical under
+/// either name — it is `ERROR_TABLE_BASE_krb5kdc + 65`) avoids depending on
+/// the header's naming at build time.
+const KRB5KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED: i32 = -1765328319;
+
 impl PkinitKdc {
+    /// Map a `verify_as_req` failure to the specific KRB-ERROR code (and, for
+    /// the ephemeral-key-parameters case, typed data) the draft mandates,
+    /// per draft-bokovoy-kitten-pkinit-pqc {{sec-ephemeral-key-errors}} /
+    /// {{sec-kdf-oids}} / {{sec-mode-selection}}.  Errors with no specific
+    /// code fall back to the pre-existing generic `EINVAL`.
+    fn error_response(&self, err: &PkinitError) -> VerifyResponse {
+        match err.kem_error_class() {
+            KemErrorClass::EphemeralKeyParamsNotAccepted => {
+                match self.state.build_td_ephemeral_key_params() {
+                    Ok(td_der) => VerifyResponse::err_with_edata(
+                        KRB5KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED,
+                        vec![PaData::new(synta_krb5::constants::TD_DH_PARAMETERS, td_der)],
+                    ),
+                    Err(_) => VerifyResponse::err(KRB5KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED),
+                }
+            }
+            KemErrorClass::NoAcceptableKdf => {
+                VerifyResponse::err(kurbu5_sys::KRB5KDC_ERR_NO_ACCEPTABLE_KDF)
+            }
+            KemErrorClass::PreauthFailed => {
+                VerifyResponse::err(kurbu5_sys::KRB5KDC_ERR_PREAUTH_FAILED)
+            }
+            KemErrorClass::Other => VerifyResponse::err(libc::EINVAL),
+        }
+    }
+
     fn return_pkinit_dh(
         &self,
         ctx: &PluginContext<'_>,

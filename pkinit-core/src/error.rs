@@ -74,9 +74,102 @@ pub enum PkinitError {
     #[error("KEM algorithm not supported: {0}")]
     KemAlgorithmNotSupported(String),
 
+    #[error("no acceptable KDF for the negotiated path")]
+    NoAcceptableKdf,
+
+    #[error("clientDHNonce must be absent when clientPublicValue carries a KEM algorithm")]
+    KemNonceNotAllowed,
+
     #[error("downgrade rejected: {0}")]
     DowngradeRejected(String),
 
     #[error("unsupported operation: {0}")]
     Unsupported(String),
+}
+
+/// Classification of a [`PkinitError`] into the specific KRB-ERROR the draft
+/// mandates, so `kurbu5-pkinit`'s krb5 plugin layer can map it to the actual
+/// `KRB5KDC_ERR_*` constant and attach `TD-EPHEMERAL-KEY-PARAMETERS-DATA`
+/// without `pkinit-core` itself depending on krb5 FFI bindings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KemErrorClass {
+    /// draft {{sec-ephemeral-key-errors}}: `KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED`
+    /// (error 65), with `TD-EPHEMERAL-KEY-PARAMETERS-DATA` listing acceptable
+    /// algorithms.
+    EphemeralKeyParamsNotAccepted,
+    /// draft {{sec-kdf-oids}} / {{sec-kdc-response}} step 3:
+    /// `KDC_ERR_NO_ACCEPTABLE_KDF` (error 100).
+    NoAcceptableKdf,
+    /// draft {{sec-mode-selection}}: `clientDHNonce` present alongside a KEM
+    /// OID in `clientPublicValue` — `KDC_ERR_PREAUTH_FAILED`.
+    PreauthFailed,
+    /// No specific error code is mandated by the draft; the plugin layer
+    /// should fall back to a generic preauth failure.
+    Other,
+}
+
+impl PkinitError {
+    /// Classify this error for KRB-ERROR code / typed-data purposes.  See
+    /// [`KemErrorClass`].
+    pub fn kem_error_class(&self) -> KemErrorClass {
+        match self {
+            PkinitError::KemAlgorithmNotSupported(_) | PkinitError::DhParamsRejected(_) => {
+                KemErrorClass::EphemeralKeyParamsNotAccepted
+            }
+            PkinitError::NoAcceptableKdf | PkinitError::NoSupportedKdf => {
+                KemErrorClass::NoAcceptableKdf
+            }
+            PkinitError::KemNonceNotAllowed => KemErrorClass::PreauthFailed,
+            _ => KemErrorClass::Other,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kem_algorithm_not_supported_maps_to_ephemeral_key_params_not_accepted() {
+        assert_eq!(
+            PkinitError::KemAlgorithmNotSupported("ML-KEM-768".into()).kem_error_class(),
+            KemErrorClass::EphemeralKeyParamsNotAccepted
+        );
+    }
+
+    #[test]
+    fn dh_params_rejected_maps_to_ephemeral_key_params_not_accepted() {
+        assert_eq!(
+            PkinitError::DhParamsRejected("weak group".into()).kem_error_class(),
+            KemErrorClass::EphemeralKeyParamsNotAccepted
+        );
+    }
+
+    #[test]
+    fn no_acceptable_kdf_maps_to_no_acceptable_kdf() {
+        assert_eq!(
+            PkinitError::NoAcceptableKdf.kem_error_class(),
+            KemErrorClass::NoAcceptableKdf
+        );
+        assert_eq!(
+            PkinitError::NoSupportedKdf.kem_error_class(),
+            KemErrorClass::NoAcceptableKdf
+        );
+    }
+
+    #[test]
+    fn kem_nonce_not_allowed_maps_to_preauth_failed() {
+        assert_eq!(
+            PkinitError::KemNonceNotAllowed.kem_error_class(),
+            KemErrorClass::PreauthFailed
+        );
+    }
+
+    #[test]
+    fn unrelated_errors_map_to_other() {
+        assert_eq!(
+            PkinitError::ChecksumFailed.kem_error_class(),
+            KemErrorClass::Other
+        );
+    }
 }
