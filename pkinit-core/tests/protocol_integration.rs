@@ -443,6 +443,187 @@ fn pkinit_kem_mlkem512_exchange() {
     run_kem_exchange(KemAlgorithm::MlKem512, 17);
 }
 
+// --- Composite ML-KEM exchange tests (draft-ietf-lamps-pq-composite-kem) ---
+//
+// Composite algorithms are explicit opt-in on the KDC side (unlike pure
+// ML-KEM's permissive empty-list default), so these need their own KDC config.
+
+fn run_composite_kem_exchange(kem_alg: KemAlgorithm, enctype: i32) {
+    let (client_id, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
+    let o2k = TestO2K;
+
+    let mut client_config = PkinitClientConfig::default();
+    client_config.kem_algorithm = Some(kem_alg);
+    let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
+    client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
+
+    let mut kdc_config = PkinitKdcConfig::default();
+    kdc_config.supported_composite_kem_algorithms = vec![kem_alg];
+    let server = PkinitKdcState::new(kdc_id, trust_store, kdc_config);
+
+    let req_body_der = b"test-composite-kem-req-body";
+    let nonce = 88888;
+    let ctime = 1719600000i64;
+
+    let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
+
+    let verified = server
+        .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
+        .unwrap();
+    assert!(!verified.is_anonymous);
+    assert!(matches!(
+        verified.key_exchange,
+        pkinit_core::server::KeyExchangeType::Kem(_)
+    ));
+
+    let as_req_full = b"test-composite-kem-full-as-req";
+    let client_name = "testuser@EXAMPLE.COM";
+    let server_name = "krbtgt/EXAMPLE.COM@EXAMPLE.COM";
+    let (pa_rep, server_key) = server
+        .build_as_rep(
+            &verified,
+            &BuildAsRepParams {
+                nonce,
+                enctype,
+                as_req_der: as_req_full,
+                client_name,
+                server_name,
+            },
+            &o2k,
+        )
+        .unwrap();
+
+    assert!(pkinit_core::kem_types::is_kem_rep(&pa_rep));
+
+    let client_key = client
+        .process_as_rep(
+            &pa_rep,
+            &pkinit_core::client::AsRepParams {
+                nonce,
+                enctype,
+                as_req_der: as_req_full,
+                pa_rep_raw: &pa_rep,
+                client_name,
+                server_name,
+            },
+            &o2k,
+        )
+        .unwrap();
+
+    assert_eq!(client_key.enctype, server_key.enctype);
+    assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
+    assert_eq!(client_key.enctype, enctype);
+    assert!(!client_key.key_data.as_ref().is_empty());
+}
+
+#[test]
+fn pkinit_kem_composite_mlkem768_x25519_exchange() {
+    run_composite_kem_exchange(KemAlgorithm::MlKem768X25519, 18);
+}
+
+#[test]
+fn pkinit_kem_composite_mlkem768_ecdh_p256_exchange() {
+    run_composite_kem_exchange(KemAlgorithm::MlKem768EcdhP256, 18);
+}
+
+#[test]
+fn pkinit_kem_composite_mlkem1024_ecdh_p384_exchange() {
+    run_composite_kem_exchange(KemAlgorithm::MlKem1024EcdhP384, 17);
+}
+
+#[test]
+fn pkinit_kem_composite_not_opted_in_is_rejected() {
+    // Composite algorithms must not be silently accepted just because ML-KEM
+    // support is compiled in — default KDC config has an empty composite list.
+    let (client_id, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
+
+    let mut client_config = PkinitClientConfig::default();
+    client_config.kem_algorithm = Some(KemAlgorithm::MlKem768EcdhP256);
+    let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
+    client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
+
+    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+
+    let req_body_der = b"composite-not-opted-in-req-body";
+    let pa_req = client
+        .build_as_req(22222, 1719600000, 0, req_body_der)
+        .unwrap();
+
+    let err = server
+        .verify_as_req(&pa_req, Some(req_body_der), 300, 1719600000)
+        .unwrap_err();
+    assert!(matches!(err, PkinitError::KemAlgorithmNotSupported(_)));
+    assert_eq!(
+        err.kem_error_class(),
+        pkinit_core::error::KemErrorClass::EphemeralKeyParamsNotAccepted
+    );
+}
+
+// --- KDC rejection -> TD-EPHEMERAL-KEY-PARAMETERS-DATA -> client retry ---
+//
+// Regression test for the error-65 wiring gap: the KDC must reject an
+// unsupported algorithm with typed data the client can actually parse and
+// act on (draft {{sec-ephemeral-key-errors}}), not a generic failure.
+
+#[test]
+fn pkinit_kem_unsupported_algorithm_td_data_enables_retry() {
+    let (client_id, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
+
+    let mut client_config = PkinitClientConfig::default();
+    client_config.kem_algorithm = Some(KemAlgorithm::MlKem768);
+    let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
+    client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
+
+    let mut kdc_config = PkinitKdcConfig::default();
+    kdc_config.supported_kem_algorithms = vec![KemAlgorithm::MlKem1024]; // rejects MlKem768
+    let server = PkinitKdcState::new(kdc_id, trust_store, kdc_config);
+
+    let req_body_der = b"td-retry-req-body";
+    let pa_req = client
+        .build_as_req(33333, 1719600000, 0, req_body_der)
+        .unwrap();
+
+    let err = server
+        .verify_as_req(&pa_req, Some(req_body_der), 300, 1719600000)
+        .unwrap_err();
+    assert!(matches!(err, PkinitError::KemAlgorithmNotSupported(_)));
+
+    // Build the same typed data the KDC plugin layer would attach to the
+    // KRB-ERROR, wrap it as a one-element METHOD-DATA, and feed it to the
+    // client's retry handler exactly as `tryagain` would receive it.
+    let td_der = server.build_td_ephemeral_key_params().unwrap();
+    let padata = vec![synta_krb5::kerberos_v5::PaData {
+        padata_type: synta_krb5::kerberos_v5::Int32::new_unchecked(
+            synta_krb5::constants::TD_DH_PARAMETERS,
+        ),
+        padata_value: synta::OctetString::new(td_der),
+    }];
+    let padata_der = {
+        use synta::ToDer;
+        padata.to_der().unwrap()
+    };
+
+    let action = client.handle_tryagain(&padata_der).unwrap();
+    match action {
+        pkinit_core::client::RetryAction::RetryWithKemAlgorithm(alg) => {
+            assert_eq!(alg, KemAlgorithm::MlKem1024);
+        }
+        other => panic!("expected RetryWithKemAlgorithm(MlKem1024), got {other:?}"),
+    }
+
+    // The retry itself must now succeed end-to-end.
+    let pa_req_2 = client
+        .build_as_req(33334, 1719600000, 0, req_body_der)
+        .unwrap();
+    let verified_2 = server
+        .verify_as_req(&pa_req_2, Some(req_body_der), 300, 1719600000)
+        .unwrap();
+    assert!(matches!(
+        verified_2.key_exchange,
+        pkinit_core::server::KeyExchangeType::Kem(KemAlgorithm::MlKem1024)
+    ));
+}
+
 #[test]
 fn pkinit_kem_anonymous_exchange() {
     let (_, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
