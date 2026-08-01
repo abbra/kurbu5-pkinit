@@ -124,6 +124,12 @@ pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
     {
         config.supported_kem_algorithms = alg.algorithms_at_or_above();
     }
+    if let Ok(names) = profile.get_values(&["kdcdefaults", "pkinit_pqc_composite_algorithms"]) {
+        config.supported_composite_kem_algorithms = names
+            .iter()
+            .filter_map(|n| KemAlgorithm::from_name(n))
+            .collect();
+    }
 
     if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_identity"), None) {
         config.identity = Some(v);
@@ -161,6 +167,12 @@ pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
         && let Some(alg) = KemAlgorithm::from_name(&v)
     {
         config.supported_kem_algorithms = alg.algorithms_at_or_above();
+    }
+    if let Ok(names) = profile.get_values(&["realms", realm, "pkinit_pqc_composite_algorithms"]) {
+        config.supported_composite_kem_algorithms = names
+            .iter()
+            .filter_map(|n| KemAlgorithm::from_name(n))
+            .collect();
     }
 
     config

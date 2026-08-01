@@ -51,6 +51,11 @@ pub struct PkinitKdcConfig {
     pub crls: Vec<String>,
     pub auth_indicators: Vec<String>,
     pub supported_kem_algorithms: Vec<KemAlgorithm>,
+    /// Composite ML-KEM algorithms the KDC accepts, in addition to
+    /// `supported_kem_algorithms`. Explicit opt-in list (not a category
+    /// floor like `supported_kem_algorithms`): each composite variant pairs
+    /// a specific traditional algorithm, so "at or above" doesn't apply.
+    pub supported_composite_kem_algorithms: Vec<KemAlgorithm>,
 }
 
 impl Default for PkinitKdcConfig {
@@ -68,6 +73,7 @@ impl Default for PkinitKdcConfig {
             crls: Vec::new(),
             auth_indicators: Vec::new(),
             supported_kem_algorithms: Vec::new(),
+            supported_composite_kem_algorithms: Vec::new(),
         }
     }
 }
