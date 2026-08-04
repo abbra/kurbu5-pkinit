@@ -1,7 +1,7 @@
 use native_ossl::util::SecretBuf;
 
 use crate::constants;
-use crate::error::PkinitError;
+use crate::error::{PkinitError, asn1_err};
 
 pub struct DerivedKey {
     pub enctype: i32,
@@ -59,8 +59,7 @@ pub fn pkinit_kdf(
     let digest_name = kdf_oid_to_digest_name(input.kdf_oid)?;
     let rand_len = o2k.random_length(input.enctype)?;
 
-    let oid = synta::ObjectIdentifier::new(input.kdf_oid)
-        .map_err(|e| PkinitError::Asn1(format!("KDF OID: {e}")))?;
+    let oid = synta::ObjectIdentifier::new(input.kdf_oid).map_err(asn1_err("KDF OID"))?;
 
     let supp_pub_info = PkinitSuppPubInfo {
         enctype: synta::Integer::from(input.enctype),
@@ -69,7 +68,7 @@ pub fn pkinit_kdf(
     };
     let supp_pub_info_der = supp_pub_info
         .to_der()
-        .map_err(|e| PkinitError::Asn1(format!("encode SuppPubInfo: {e}")))?;
+        .map_err(asn1_err("encode SuppPubInfo"))?;
 
     let other_info = OtherInfo {
         algorithm_id: AlgorithmIdentifier {
@@ -85,10 +84,8 @@ pub fn pkinit_kdf(
     let mut encoder = synta::Encoder::new(synta::Encoding::Der);
     other_info
         .encode(&mut encoder)
-        .map_err(|e| PkinitError::Asn1(format!("encode OtherInfo: {e}")))?;
-    let other_info_der = encoder
-        .finish()
-        .map_err(|e| PkinitError::Asn1(format!("finish OtherInfo: {e}")))?;
+        .map_err(asn1_err("encode OtherInfo"))?;
+    let other_info_der = encoder.finish().map_err(asn1_err("finish OtherInfo"))?;
 
     let random_data = sskdf(digest_name, input.shared_secret, &other_info_der, rand_len)?;
 
@@ -121,7 +118,7 @@ pub fn pkinit_kem_kdf(
     };
     let supp_pub_info_der = supp_pub_info
         .to_der()
-        .map_err(|e| PkinitError::Asn1(format!("encode PkinitKEMSuppPubInfo: {e}")))?;
+        .map_err(asn1_err("encode PkinitKEMSuppPubInfo"))?;
 
     let hmac = synta_certificate::default_hmac_provider();
     let prk = synta_certificate::hkdf_extract(&hmac, "sha512", None, input.shared_secret)
@@ -175,7 +172,7 @@ pub fn encode_principal_for_kdf(name: &str) -> Result<Vec<u8>, PkinitError> {
             &["WELLKNOWN", "ANONYMOUS"],
             "WELLKNOWN:ANONYMOUS",
         )
-        .map_err(|e| PkinitError::Asn1(format!("encode anonymous principal for KDF: {e}")));
+        .map_err(asn1_err("encode anonymous principal for KDF"));
     }
 
     let (pname, realm_opt) = synta_krb5::principal::parse_principal(name)
@@ -196,7 +193,7 @@ pub fn encode_principal_for_kdf(name: &str) -> Result<Vec<u8>, PkinitError> {
             .collect::<Vec<_>>(),
         &realm_str,
     )
-    .map_err(|e| PkinitError::Asn1(format!("encode principal for KDF: {e}")))
+    .map_err(asn1_err("encode principal for KDF"))
 }
 
 fn is_anonymous_principal(name: &str) -> bool {

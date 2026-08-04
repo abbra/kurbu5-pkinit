@@ -8,7 +8,7 @@ use crate::crypto::checksum;
 use crate::crypto::cms;
 use crate::crypto::dh::{self, DhKeyPair};
 use crate::crypto::kdf::{self, DerivedKey, OctetString2Key, encode_principal_for_kdf};
-use crate::error::PkinitError;
+use crate::error::{PkinitError, asn1_err};
 use crate::identity::{PkinitIdentity, TrustStore};
 
 #[derive(Debug)]
@@ -105,7 +105,7 @@ impl PkinitKdcState {
     ) -> Result<VerifiedRequest, PkinitError> {
         let pa_req: synta_krb5::pkinit::PaPkAsReq<'_> =
             synta_krb5::pkinit::PaPkAsReq::from_der(pa_req_der)
-                .map_err(|e| PkinitError::Asn1(format!("decode PA-PK-AS-REQ: {e}")))?;
+                .map_err(asn1_err("decode PA-PK-AS-REQ"))?;
 
         let verified_cms = cms::verify_signed_data(pa_req.signed_auth_pack.as_bytes());
 
@@ -165,7 +165,7 @@ impl PkinitKdcState {
 
         let auth_pack: synta_krb5::pkinit::AuthPack<'_> =
             synta_krb5::pkinit::AuthPack::from_der(&auth_pack_der)
-                .map_err(|e| PkinitError::Asn1(format!("decode AuthPack: {e}")))?;
+                .map_err(asn1_err("decode AuthPack"))?;
 
         let pk_auth = &auth_pack.pk_authenticator;
 
@@ -204,7 +204,7 @@ impl PkinitKdcState {
             .as_ref()
             .ok_or_else(|| PkinitError::DhParamsRejected("missing client DH public value".into()))?
             .to_der()
-            .map_err(|e| PkinitError::Asn1(format!("encode client SPKI: {e}")))?;
+            .map_err(asn1_err("encode client SPKI"))?;
 
         let key_exchange = match detect_spki_algorithm(&client_dh_public)? {
             Some(kem_alg) => {
@@ -224,10 +224,7 @@ impl PkinitKdcState {
             )?),
         };
 
-        let nonce = pk_auth
-            .nonce
-            .as_i64()
-            .map_err(|e| PkinitError::Asn1(format!("nonce: {e}")))? as i32;
+        let nonce = pk_auth.nonce.as_i64().map_err(asn1_err("nonce"))? as i32;
 
         let client_dh_nonce = auth_pack
             .client_dhnonce
@@ -295,10 +292,9 @@ impl PkinitKdcState {
         let (kemct, shared_secret) =
             kem::encapsulate_for_client(&verified.client_dh_public, kem_alg)?;
 
-        let kem_oid = synta::ObjectIdentifier::new(kem_alg.oid())
-            .map_err(|e| PkinitError::Asn1(format!("KEM OID: {e}")))?;
+        let kem_oid = synta::ObjectIdentifier::new(kem_alg.oid()).map_err(asn1_err("KEM OID"))?;
         let kdf_oid = synta::ObjectIdentifier::new(crate::constants::ID_ALG_HKDF_WITH_SHA512)
-            .map_err(|e| PkinitError::Asn1(format!("KDF OID: {e}")))?;
+            .map_err(asn1_err("KDF OID"))?;
 
         let kdc_kem_info = KdcKemInfo {
             kem_algorithm: synta_certificate::AlgorithmIdentifier {
@@ -316,7 +312,7 @@ impl PkinitKdcState {
 
         let kdc_kem_info_der = kdc_kem_info
             .to_der()
-            .map_err(|e| PkinitError::Asn1(format!("encode KDCKEMInfo: {e}")))?;
+            .map_err(asn1_err("encode KDCKEMInfo"))?;
 
         let signer_key = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
             self.identity.key_pkcs8_der.clone(),
@@ -372,14 +368,14 @@ impl PkinitKdcState {
 
         let kdc_dh_key_info = synta_krb5::pkinit::KDCDHKeyInfo {
             subject_public_key: synta::BitStringRef::new(&kdc_pub_bits, 0)
-                .map_err(|e| PkinitError::Asn1(format!("BitStringRef: {e}")))?,
+                .map_err(asn1_err("BitStringRef"))?,
             nonce: synta::Integer::from(nonce),
             dh_key_expiration: None,
         };
 
         let kdc_dh_key_info_der = kdc_dh_key_info
             .to_der()
-            .map_err(|e| PkinitError::Asn1(format!("encode KDCDHKeyInfo: {e}")))?;
+            .map_err(asn1_err("encode KDCDHKeyInfo"))?;
 
         let signer_key = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
             self.identity.key_pkcs8_der.clone(),
@@ -411,9 +407,7 @@ impl PkinitKdcState {
         };
 
         let pa_rep = synta_krb5::pkinit::PaPkAsRep::DhInfo(dh_rep_info);
-        let pa_rep_der = pa_rep
-            .to_der()
-            .map_err(|e| PkinitError::Asn1(format!("encode PA-PK-AS-REP: {e}")))?;
+        let pa_rep_der = pa_rep.to_der().map_err(asn1_err("encode PA-PK-AS-REP"))?;
 
         let derived_key = if let Some(kdf_oid) = selected_kdf {
             let party_u = encode_principal_for_kdf(client_name)?;
@@ -460,7 +454,7 @@ fn build_supported_algorithms_hint(config: &PkinitKdcConfig) -> Result<Vec<u8>, 
 fn build_td_ephemeral_key_params(config: &PkinitKdcConfig) -> Result<Vec<u8>, PkinitError> {
     acceptable_key_establishment_alg_ids(config)?
         .to_der()
-        .map_err(|e| PkinitError::Asn1(format!("encode TD params: {e}")))
+        .map_err(asn1_err("encode TD params"))
 }
 
 /// Every acceptable `AlgorithmIdentifier` (KEM + composite KEM with absent
@@ -478,8 +472,7 @@ fn acceptable_key_establishment_alg_ids(
         .iter()
         .chain(&config.supported_composite_kem_algorithms)
         .map(|alg| {
-            let algorithm = ObjectIdentifier::new(alg.oid())
-                .map_err(|e| PkinitError::Asn1(format!("KEM OID: {e}")))?;
+            let algorithm = ObjectIdentifier::new(alg.oid()).map_err(asn1_err("KEM OID"))?;
             Ok(AlgorithmIdentifier {
                 algorithm,
                 parameters: None,
@@ -508,8 +501,7 @@ fn group_algorithm_identifier(
 ) -> Result<synta_certificate::AlgorithmIdentifier<'static>, PkinitError> {
     let (algorithm, parameters) = dh::group_algorithm_oid_and_params(group)?;
     Ok(synta_certificate::AlgorithmIdentifier {
-        algorithm: synta::ObjectIdentifier::new(algorithm)
-            .map_err(|e| PkinitError::Asn1(format!("algorithm OID: {e}")))?,
+        algorithm: synta::ObjectIdentifier::new(algorithm).map_err(asn1_err("algorithm OID"))?,
         parameters,
     })
 }
@@ -518,7 +510,7 @@ fn detect_spki_algorithm(spki_der: &[u8]) -> Result<Option<KemAlgorithm>, Pkinit
     let spki: synta_krb5::kerberos_v5_pkinit_agility::SubjectPublicKeyInfo<'_> =
         synta::Decoder::new(spki_der, synta::Encoding::Der)
             .decode()
-            .map_err(|e| PkinitError::Asn1(format!("decode SPKI: {e}")))?;
+            .map_err(asn1_err("decode SPKI"))?;
     let oid_components = spki.algorithm.algorithm.components();
     Ok(KemAlgorithm::from_oid(oid_components))
 }
@@ -527,7 +519,7 @@ fn extract_pub_key_bits(spki_der: &[u8]) -> Result<Vec<u8>, PkinitError> {
     let spki: synta_krb5::kerberos_v5_pkinit_agility::SubjectPublicKeyInfo<'_> =
         synta::Decoder::new(spki_der, synta::Encoding::Der)
             .decode()
-            .map_err(|e| PkinitError::Asn1(format!("decode SPKI: {e}")))?;
+            .map_err(asn1_err("decode SPKI"))?;
     Ok(spki.subject_public_key.as_bytes().to_vec())
 }
 

@@ -1,7 +1,7 @@
 use synta::{Integer, OctetString};
 use synta_certificate::AlgorithmIdentifier;
 
-use crate::error::PkinitError;
+use crate::error::{PkinitError, asn1_err};
 
 /// KEMRepInfo carries the KDC's KEM response.
 ///
@@ -137,7 +137,7 @@ pub(crate) fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, Pkini
 pub(crate) fn encode_kem_rep_wrapper(kem_rep_info: &KemRepInfo) -> Result<Vec<u8>, PkinitError> {
     let inner_der = kem_rep_info
         .to_der()
-        .map_err(|e| PkinitError::Asn1(format!("encode KEMRepInfo: {e}")))?;
+        .map_err(asn1_err("encode KEMRepInfo"))?;
     let mut out = Vec::with_capacity(1 + 4 + inner_der.len());
     out.push(PA_PK_AS_REP_KEM_TAG);
     der_encode_length(inner_der.len(), &mut out);
@@ -208,17 +208,13 @@ pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, P
         let empty_seq: Vec<AlgorithmIdentifier<'_>> = vec![];
         empty_seq
             .encode(&mut encoder)
-            .map_err(|e| PkinitError::Asn1(format!("encode hint: {e}")))?;
-        return encoder
-            .finish()
-            .map_err(|e| PkinitError::Asn1(format!("finish hint: {e}")));
+            .map_err(asn1_err("encode hint"))?;
+        return encoder.finish().map_err(asn1_err("finish hint"));
     }
 
     let oids: Vec<synta::ObjectIdentifier> = algorithm_oids
         .iter()
-        .map(|oid| {
-            synta::ObjectIdentifier::new(oid).map_err(|e| PkinitError::Asn1(format!("OID: {e}")))
-        })
+        .map(|oid| synta::ObjectIdentifier::new(oid).map_err(asn1_err("OID")))
         .collect::<Result<Vec<_>, _>>()?;
 
     let alg_ids: Vec<AlgorithmIdentifier<'_>> = oids
@@ -232,10 +228,8 @@ pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, P
     let mut inner_encoder = synta::Encoder::new(synta::Encoding::Der);
     alg_ids
         .encode(&mut inner_encoder)
-        .map_err(|e| PkinitError::Asn1(format!("encode alg ids: {e}")))?;
-    let seq_of_der = inner_encoder
-        .finish()
-        .map_err(|e| PkinitError::Asn1(format!("finish alg ids: {e}")))?;
+        .map_err(asn1_err("encode alg ids"))?;
+    let seq_of_der = inner_encoder.finish().map_err(asn1_err("finish alg ids"))?;
 
     // Wrap in [0] EXPLICIT tag
     let mut tagged = Vec::with_capacity(1 + 4 + seq_of_der.len());
@@ -291,7 +285,7 @@ pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, Pkinit
     let alg_ids: Vec<AlgorithmIdentifier<'_>> =
         synta::Decoder::new(tag0_content, synta::Encoding::Der)
             .decode()
-            .map_err(|e| PkinitError::Asn1(format!("decode ephemeralKeyParameters: {e}")))?;
+            .map_err(asn1_err("decode ephemeralKeyParameters"))?;
 
     Ok(alg_ids
         .iter()
