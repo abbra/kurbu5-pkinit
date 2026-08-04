@@ -7,6 +7,16 @@ use pkinit_core::identity::{PkinitIdentity, TrustStore};
 use pkinit_core::server::{BuildAsRepParams, PkinitKdcState};
 use synta_certificate::crypto::{BackendPrivateKey, PrivateKey};
 
+use std::sync::atomic::{AtomicI32, Ordering};
+
+/// A fresh nonce for each AS-REQ, generated once per exchange and threaded
+/// through every step (`build_as_req` -> `BuildAsRepParams` -> `AsRepParams`)
+/// instead of hardcoding the same literal at each call site.
+fn next_nonce() -> i32 {
+    static NEXT: AtomicI32 = AtomicI32::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 struct TestO2K;
 
 impl OctetString2Key for TestO2K {
@@ -197,7 +207,7 @@ fn run_dh_exchange(key_type: TestKeyType, dh_group: DhGroup, enctype: i32) {
     let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
 
     let req_body_der = b"test-kdc-req-body";
-    let nonce = 99999;
+    let nonce = next_nonce();
     let ctime = 1719600000i64;
 
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
@@ -263,7 +273,7 @@ fn run_anonymous_exchange(dh_group: DhGroup) {
     let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
 
     let req_body_der = b"anon-req-body";
-    let nonce = 12345;
+    let nonce = next_nonce();
     let enctype = 18;
     let ctime = 1719600000i64;
 
@@ -374,7 +384,7 @@ fn run_kem_exchange(kem_alg: KemAlgorithm, enctype: i32) {
     let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
 
     let req_body_der = b"test-kem-req-body";
-    let nonce = 77777;
+    let nonce = next_nonce();
     let ctime = 1719600000i64;
 
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
@@ -462,7 +472,7 @@ fn run_composite_kem_exchange(kem_alg: KemAlgorithm, enctype: i32) {
     let server = PkinitKdcState::new(kdc_id, trust_store, kdc_config);
 
     let req_body_der = b"test-composite-kem-req-body";
-    let nonce = 88888;
+    let nonce = next_nonce();
     let ctime = 1719600000i64;
 
     let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
@@ -545,8 +555,9 @@ fn pkinit_kem_composite_not_opted_in_is_rejected() {
     let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
 
     let req_body_der = b"composite-not-opted-in-req-body";
+    let nonce = next_nonce();
     let pa_req = client
-        .build_as_req(22222, 1719600000, 0, req_body_der)
+        .build_as_req(nonce, 1719600000, 0, req_body_der)
         .unwrap();
 
     let err = server
@@ -580,8 +591,9 @@ fn pkinit_kem_unsupported_algorithm_td_data_enables_retry() {
     let server = PkinitKdcState::new(kdc_id, trust_store, kdc_config);
 
     let req_body_der = b"td-retry-req-body";
+    let nonce = next_nonce();
     let pa_req = client
-        .build_as_req(33333, 1719600000, 0, req_body_der)
+        .build_as_req(nonce, 1719600000, 0, req_body_der)
         .unwrap();
 
     let err = server
@@ -613,8 +625,9 @@ fn pkinit_kem_unsupported_algorithm_td_data_enables_retry() {
     }
 
     // The retry itself must now succeed end-to-end.
+    let nonce_2 = next_nonce();
     let pa_req_2 = client
-        .build_as_req(33334, 1719600000, 0, req_body_der)
+        .build_as_req(nonce_2, 1719600000, 0, req_body_der)
         .unwrap();
     let verified_2 = server
         .verify_as_req(&pa_req_2, Some(req_body_der), 300, 1719600000)
@@ -634,7 +647,7 @@ fn pkinit_kem_unsupported_algorithm_td_data_enables_retry() {
         .build_as_rep(
             &verified_2,
             &BuildAsRepParams {
-                nonce: 33334,
+                nonce: nonce_2,
                 enctype: 18,
                 as_req_der: as_req_full,
                 client_name,
@@ -650,7 +663,7 @@ fn pkinit_kem_unsupported_algorithm_td_data_enables_retry() {
         .process_as_rep(
             &pa_rep,
             &pkinit_core::client::AsRepParams {
-                nonce: 33334,
+                nonce: nonce_2,
                 enctype: 18,
                 as_req_der: as_req_full,
                 pa_rep_raw: &pa_rep,
@@ -684,7 +697,7 @@ fn pkinit_kem_anonymous_exchange() {
     let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
 
     let req_body_der = b"anon-kem-req-body";
-    let nonce = 33333;
+    let nonce = next_nonce();
     let enctype = 18;
     let ctime = 1719600000i64;
 
@@ -756,7 +769,7 @@ fn pkinit_anonymous_rsa_exchange() {
     let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
 
     let req_body_der = b"anon-rsa-req-body";
-    let nonce = 54321;
+    let nonce = next_nonce();
     let enctype = 18;
     let ctime = 1719600000i64;
 
