@@ -568,6 +568,7 @@ fn pkinit_kem_composite_not_opted_in_is_rejected() {
 #[test]
 fn pkinit_kem_unsupported_algorithm_td_data_enables_retry() {
     let (client_id, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
+    let o2k = TestO2K;
 
     let mut client_config = PkinitClientConfig::default();
     client_config.kem_algorithm = Some(KemAlgorithm::MlKem768);
@@ -622,6 +623,46 @@ fn pkinit_kem_unsupported_algorithm_td_data_enables_retry() {
         verified_2.key_exchange,
         pkinit_core::server::KeyExchangeType::Kem(KemAlgorithm::MlKem1024)
     ));
+
+    // Complete the exchange end-to-end: the retry must not just be accepted,
+    // it must produce identical keys on both sides, mirroring the KEM/composite
+    // happy-path tests above.
+    let as_req_full = b"td-retry-full-as-req";
+    let client_name = "testuser@EXAMPLE.COM";
+    let server_name = "krbtgt/EXAMPLE.COM@EXAMPLE.COM";
+    let (pa_rep, server_key) = server
+        .build_as_rep(
+            &verified_2,
+            &BuildAsRepParams {
+                nonce: 33334,
+                enctype: 18,
+                as_req_der: as_req_full,
+                client_name,
+                server_name,
+            },
+            &o2k,
+        )
+        .unwrap();
+
+    assert!(pkinit_core::kem_types::is_kem_rep(&pa_rep));
+
+    let client_key = client
+        .process_as_rep(
+            &pa_rep,
+            &pkinit_core::client::AsRepParams {
+                nonce: 33334,
+                enctype: 18,
+                as_req_der: as_req_full,
+                pa_rep_raw: &pa_rep,
+                client_name,
+                server_name,
+            },
+            &o2k,
+        )
+        .unwrap();
+
+    assert_eq!(client_key.enctype, server_key.enctype);
+    assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
 }
 
 #[test]
