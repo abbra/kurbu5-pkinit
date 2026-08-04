@@ -296,6 +296,47 @@ const OAKLEY_4096_PRIME: &[u8] = &[
     0x4D, 0xF4, 0x35, 0xC9, 0x34, 0x06, 0x31, 0x99, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 ];
 
+/// The `AlgorithmIdentifier` OID and parameters that identify `group`'s
+/// key-establishment algorithm: `id-ecPublicKey` with the curve OID as
+/// parameters for EC groups, or `dhpublicnumber` with the real Oakley
+/// domain parameters for classic DH groups. Shared by the client (rebuilding
+/// the KDC's SPKI to derive the shared secret) and the server (advertising
+/// acceptable algorithms in `TD-EPHEMERAL-KEY-PARAMETERS-DATA`), so both
+/// sides agree on exactly one encoding per group.
+pub fn group_algorithm_oid_and_params(
+    group: DhGroup,
+) -> Result<(&'static [u32], Option<synta::Element<'static>>), PkinitError> {
+    let curve = match group {
+        DhGroup::EcP256 => Some(synta_krb5::pkix1_algorithms2008::SECP256R1),
+        DhGroup::EcP384 => Some(synta_krb5::pkix1_algorithms2008::SECP384R1),
+        DhGroup::EcP521 => Some(synta_krb5::pkix1_algorithms2008::SECP521R1),
+        DhGroup::Oakley2048 | DhGroup::Oakley4096 => None,
+    };
+
+    match curve {
+        Some(curve) => {
+            let curve_oid = synta::ObjectIdentifier::new(curve)
+                .map_err(|e| PkinitError::Asn1(format!("curve OID: {e}")))?;
+            Ok((
+                synta_krb5::pkix1_algorithms2008::ID_EC_PUBLIC_KEY,
+                Some(synta::Element::ObjectIdentifier(curve_oid)),
+            ))
+        }
+        None => {
+            let params_der = group_params_der(group)
+                .ok_or_else(|| PkinitError::DhParamsRejected("unknown DH group".into()))?;
+            let params_element: synta::Element<'static> =
+                synta::Decoder::new(params_der, synta::Encoding::Der)
+                    .decode()
+                    .map_err(|e| PkinitError::Asn1(format!("decode DH params: {e}")))?;
+            Ok((
+                synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER,
+                Some(params_element),
+            ))
+        }
+    }
+}
+
 /// The DER-encoded DomainParameters for each DH group, used by the protocol
 /// layer when encoding clientPublicValue in AuthPack.
 pub fn group_params_der(group: DhGroup) -> Option<&'static [u8]> {

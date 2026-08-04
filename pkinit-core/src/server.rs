@@ -69,15 +69,9 @@ impl PkinitKdcState {
     /// (`PkinitClientState::handle_tryagain`) can act on them directly, per
     /// {{RFC4556}} Section 3.2.2.
     pub fn build_td_ephemeral_key_params(&self) -> Result<Vec<u8>, PkinitError> {
-        use synta::Encode;
-
-        let alg_ids = self.acceptable_key_establishment_alg_ids()?;
-        let mut enc = synta::Encoder::new(synta::Encoding::Der);
-        alg_ids
-            .encode(&mut enc)
-            .map_err(|e| PkinitError::Asn1(format!("encode TD params: {e}")))?;
-        enc.finish()
-            .map_err(|e| PkinitError::Asn1(format!("finish TD params: {e}")))
+        self.acceptable_key_establishment_alg_ids()?
+            .to_der()
+            .map_err(|e| PkinitError::Asn1(format!("encode TD params: {e}")))
     }
 
     /// Every acceptable `AlgorithmIdentifier` (KEM + composite KEM with
@@ -491,36 +485,12 @@ impl PkinitKdcState {
 fn group_algorithm_identifier(
     group: DhGroup,
 ) -> Result<synta_certificate::AlgorithmIdentifier<'static>, PkinitError> {
-    use synta::{Element, ObjectIdentifier};
-    use synta_certificate::AlgorithmIdentifier;
-
-    if group.is_ec() {
-        let curve = match group {
-            DhGroup::EcP256 => synta_krb5::pkix1_algorithms2008::SECP256R1,
-            DhGroup::EcP384 => synta_krb5::pkix1_algorithms2008::SECP384R1,
-            DhGroup::EcP521 => synta_krb5::pkix1_algorithms2008::SECP521R1,
-            _ => unreachable!("non-EC group in EC branch"),
-        };
-        let curve_oid = ObjectIdentifier::new(curve)
-            .map_err(|e| PkinitError::Asn1(format!("curve OID: {e}")))?;
-        Ok(AlgorithmIdentifier {
-            algorithm: ObjectIdentifier::new(synta_krb5::pkix1_algorithms2008::ID_EC_PUBLIC_KEY)
-                .map_err(|e| PkinitError::Asn1(format!("EC OID: {e}")))?,
-            parameters: Some(Element::ObjectIdentifier(curve_oid)),
-        })
-    } else {
-        let params_der = dh::group_params_der(group)
-            .ok_or_else(|| PkinitError::DhParamsRejected("unknown DH group".into()))?;
-        let params_element: Element<'static> =
-            synta::Decoder::new(params_der, synta::Encoding::Der)
-                .decode()
-                .map_err(|e| PkinitError::Asn1(format!("decode DH params: {e}")))?;
-        Ok(AlgorithmIdentifier {
-            algorithm: ObjectIdentifier::new(synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER)
-                .map_err(|e| PkinitError::Asn1(format!("DH OID: {e}")))?,
-            parameters: Some(params_element),
-        })
-    }
+    let (algorithm, parameters) = dh::group_algorithm_oid_and_params(group)?;
+    Ok(synta_certificate::AlgorithmIdentifier {
+        algorithm: synta::ObjectIdentifier::new(algorithm)
+            .map_err(|e| PkinitError::Asn1(format!("algorithm OID: {e}")))?,
+        parameters,
+    })
 }
 
 fn detect_spki_algorithm(spki_der: &[u8]) -> Result<Option<KemAlgorithm>, PkinitError> {
