@@ -1,4 +1,4 @@
-use crate::error::PkinitError;
+use crate::error::{PkinitError, asn1_err};
 use synta::{Element, Encoding, ObjectIdentifier, ToDer};
 use synta_certificate::{
     Certificate, ExtendedKeyUsage, GeneralName, GeneralNames, KeyUsage, find_extension_value,
@@ -6,8 +6,7 @@ use synta_certificate::{
 };
 
 fn parse_cert(cert_der: &[u8]) -> Result<Certificate<'_>, PkinitError> {
-    Certificate::from_der(cert_der)
-        .map_err(|e| PkinitError::Asn1(format!("parse certificate: {e}")))
+    Certificate::from_der(cert_der).map_err(asn1_err("parse certificate"))
 }
 
 fn extensions_raw<'a>(cert: &'a Certificate<'a>) -> Option<&'a [u8]> {
@@ -22,8 +21,7 @@ fn decode_san<'a>(ext_raw: &'a [u8]) -> Result<GeneralNames<'a>, PkinitError> {
         Some(b) => b,
         None => return Ok(GeneralNames(Vec::new())),
     };
-    GeneralNames::from_der(san_bytes)
-        .map_err(|e| PkinitError::Asn1(format!("decode SubjectAltName: {e}")))
+    GeneralNames::from_der(san_bytes).map_err(asn1_err("decode SubjectAltName"))
 }
 
 /// Extract PKINIT SAN principals from an X.509 certificate.
@@ -42,9 +40,7 @@ pub fn extract_pkinit_sans(cert_der: &[u8]) -> Result<Vec<String>, PkinitError> 
     let mut result = Vec::new();
     for gn in &sans {
         if let GeneralName::OtherName(on) = gn {
-            let on_der = on
-                .to_der()
-                .map_err(|e| PkinitError::Asn1(format!("encode OtherName: {e}")))?;
+            let on_der = on.to_der().map_err(asn1_err("encode OtherName"))?;
             if let Some(principal) = synta_krb5::principal::decode_krb5_san(&on_der) {
                 result.push(principal);
             }
@@ -67,7 +63,7 @@ pub fn extract_upn_sans(cert_der: &[u8]) -> Result<Vec<String>, PkinitError> {
     let sans = decode_san(ext_raw)?;
 
     let ms_upn_oid = ObjectIdentifier::new(synta_certificate::oids::ID_MS_SAN_UPN)
-        .map_err(|e| PkinitError::Asn1(format!("UPN OID: {e}")))?;
+        .map_err(asn1_err("UPN OID"))?;
 
     let mut result = Vec::new();
     for gn in &sans {
@@ -116,8 +112,7 @@ pub fn extract_eku_oids(cert_der: &[u8]) -> Result<Vec<Vec<u32>>, PkinitError> {
         None => return Ok(Vec::new()),
     };
 
-    let eku = ExtendedKeyUsage::from_der(eku_bytes)
-        .map_err(|e| PkinitError::Asn1(format!("decode ExtendedKeyUsage: {e}")))?;
+    let eku = ExtendedKeyUsage::from_der(eku_bytes).map_err(asn1_err("decode ExtendedKeyUsage"))?;
 
     Ok(eku.iter().map(|oid| oid.components().to_vec()).collect())
 }
@@ -138,8 +133,7 @@ pub fn extract_key_usage(cert_der: &[u8]) -> Result<u16, PkinitError> {
         None => return Ok(0),
     };
 
-    let ku = KeyUsage::from_der(ku_bytes)
-        .map_err(|e| PkinitError::Asn1(format!("decode KeyUsage: {e}")))?;
+    let ku = KeyUsage::from_der(ku_bytes).map_err(asn1_err("decode KeyUsage"))?;
 
     let mut bits: u16 = 0;
     for i in 0..9 {
@@ -160,28 +154,22 @@ pub fn encode_upn_other_name(upn: &str) -> Result<Vec<u8>, PkinitError> {
     use synta::{Encoder, Tag, TagClass, Utf8StringRef};
 
     let upn_oid = ObjectIdentifier::new(synta_certificate::oids::ID_MS_SAN_UPN)
-        .map_err(|e| PkinitError::Asn1(format!("UPN OID: {e}")))?;
+        .map_err(asn1_err("UPN OID"))?;
     let upn_str = Utf8StringRef::new(upn);
-    let upn_der = upn_str
-        .to_der()
-        .map_err(|e| PkinitError::Asn1(format!("encode UPN: {e}")))?;
+    let upn_der = upn_str.to_der().map_err(asn1_err("encode UPN"))?;
 
     let mut enc = Encoder::new(Encoding::Der);
     enc.start_constructed_no_guard(Tag::universal_constructed(TAG_SEQUENCE))
-        .map_err(|e| PkinitError::Asn1(format!("othername seq: {e}")))?;
-    enc.encode(&upn_oid)
-        .map_err(|e| PkinitError::Asn1(format!("encode OID: {e}")))?;
+        .map_err(asn1_err("othername seq"))?;
+    enc.encode(&upn_oid).map_err(asn1_err("encode OID"))?;
 
     enc.start_constructed_no_guard(Tag::new(TagClass::ContextSpecific, true, 0))
-        .map_err(|e| PkinitError::Asn1(format!("value tag: {e}")))?;
+        .map_err(asn1_err("value tag"))?;
     enc.write_bytes(&upn_der);
-    enc.end_constructed()
-        .map_err(|e| PkinitError::Asn1(format!("value end: {e}")))?;
+    enc.end_constructed().map_err(asn1_err("value end"))?;
 
-    enc.end_constructed()
-        .map_err(|e| PkinitError::Asn1(format!("othername end: {e}")))?;
-    enc.finish()
-        .map_err(|e| PkinitError::Asn1(format!("finish: {e}")))
+    enc.end_constructed().map_err(asn1_err("othername end"))?;
+    enc.finish().map_err(asn1_err("finish"))
 }
 
 #[cfg(test)]

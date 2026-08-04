@@ -87,6 +87,14 @@ pub enum PkinitError {
     Unsupported(String),
 }
 
+/// Wrap a `synta` encode/decode failure as [`PkinitError::Asn1`] with a
+/// short static context, e.g. `.map_err(asn1_err("KEM OID"))?`, instead of
+/// restating `.map_err(|e| PkinitError::Asn1(format!("KEM OID: {e}")))` at
+/// every ASN.1 call site.
+pub(crate) fn asn1_err(context: &'static str) -> impl FnOnce(synta::Error) -> PkinitError {
+    move |e| PkinitError::Asn1(format!("{context}: {e}"))
+}
+
 /// Classification of a [`PkinitError`] into the specific KRB-ERROR the draft
 /// mandates, so `kurbu5-pkinit`'s krb5 plugin layer can map it to the actual
 /// `KRB5KDC_ERR_*` constant and attach `TD-EPHEMERAL-KEY-PARAMETERS-DATA`

@@ -1,5 +1,5 @@
 use crate::constants::DhGroup;
-use crate::error::PkinitError;
+use crate::error::{PkinitError, asn1_err};
 use native_ossl::pkey::{DeriveCtx, KeygenCtx, Pkey, Private, Public};
 
 pub struct DhKeyPair {
@@ -315,8 +315,7 @@ pub fn group_algorithm_oid_and_params(
 
     match curve {
         Some(curve) => {
-            let curve_oid = synta::ObjectIdentifier::new(curve)
-                .map_err(|e| PkinitError::Asn1(format!("curve OID: {e}")))?;
+            let curve_oid = synta::ObjectIdentifier::new(curve).map_err(asn1_err("curve OID"))?;
             Ok((
                 synta_krb5::pkix1_algorithms2008::ID_EC_PUBLIC_KEY,
                 Some(synta::Element::ObjectIdentifier(curve_oid)),
@@ -328,7 +327,7 @@ pub fn group_algorithm_oid_and_params(
             let params_element: synta::Element<'static> =
                 synta::Decoder::new(params_der, synta::Encoding::Der)
                     .decode()
-                    .map_err(|e| PkinitError::Asn1(format!("decode DH params: {e}")))?;
+                    .map_err(asn1_err("decode DH params"))?;
             Ok((
                 synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER,
                 Some(params_element),

@@ -1,4 +1,4 @@
-use crate::error::PkinitError;
+use crate::error::{PkinitError, asn1_err};
 use crate::san;
 
 #[derive(Debug)]
@@ -155,7 +155,7 @@ fn extract_subject_dn(cert_der: &[u8]) -> Result<String, PkinitError> {
     let cert: synta_certificate::Certificate<'_> =
         synta::Decoder::new(cert_der, synta::Encoding::Der)
             .decode()
-            .map_err(|e| PkinitError::Asn1(format!("decoding cert: {e}")))?;
+            .map_err(asn1_err("decoding cert"))?;
     Ok(synta_certificate::format_dn(
         cert.tbs_certificate.subject.as_bytes(),
     ))
@@ -165,7 +165,7 @@ fn extract_issuer_dn(cert_der: &[u8]) -> Result<String, PkinitError> {
     let cert: synta_certificate::Certificate<'_> =
         synta::Decoder::new(cert_der, synta::Encoding::Der)
             .decode()
-            .map_err(|e| PkinitError::Asn1(format!("decoding cert: {e}")))?;
+            .map_err(asn1_err("decoding cert"))?;
     Ok(synta_certificate::format_dn(
         cert.tbs_certificate.issuer.as_bytes(),
     ))
