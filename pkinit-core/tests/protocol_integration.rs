@@ -204,7 +204,7 @@ fn run_dh_exchange(key_type: TestKeyType, dh_group: DhGroup, enctype: i32) {
     let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
-    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
 
     let req_body_der = b"test-kdc-req-body";
     let nonce = next_nonce();
@@ -270,7 +270,7 @@ fn run_anonymous_exchange(dh_group: DhGroup) {
     let mut client = PkinitClientState::new(anon_identity, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
-    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
 
     let req_body_der = b"anon-req-body";
     let nonce = next_nonce();
@@ -381,7 +381,7 @@ fn run_kem_exchange(kem_alg: KemAlgorithm, enctype: i32) {
     let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
-    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
 
     let req_body_der = b"test-kem-req-body";
     let nonce = next_nonce();
@@ -469,7 +469,7 @@ fn run_composite_kem_exchange(kem_alg: KemAlgorithm, enctype: i32) {
 
     let mut kdc_config = PkinitKdcConfig::default();
     kdc_config.supported_composite_kem_algorithms = vec![kem_alg];
-    let server = PkinitKdcState::new(kdc_id, trust_store, kdc_config);
+    let server = PkinitKdcState::new(kdc_id, trust_store, kdc_config).unwrap();
 
     let req_body_der = b"test-composite-kem-req-body";
     let nonce = next_nonce();
@@ -552,7 +552,7 @@ fn pkinit_kem_composite_not_opted_in_is_rejected() {
     let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
-    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
 
     let req_body_der = b"composite-not-opted-in-req-body";
     let nonce = next_nonce();
@@ -588,7 +588,7 @@ fn pkinit_kem_unsupported_algorithm_td_data_enables_retry() {
 
     let mut kdc_config = PkinitKdcConfig::default();
     kdc_config.supported_kem_algorithms = vec![KemAlgorithm::MlKem1024]; // rejects MlKem768
-    let server = PkinitKdcState::new(kdc_id, trust_store, kdc_config);
+    let server = PkinitKdcState::new(kdc_id, trust_store, kdc_config).unwrap();
 
     let req_body_der = b"td-retry-req-body";
     let nonce = next_nonce();
@@ -604,7 +604,54 @@ fn pkinit_kem_unsupported_algorithm_td_data_enables_retry() {
     // Build the same typed data the KDC plugin layer would attach to the
     // KRB-ERROR, wrap it as a one-element METHOD-DATA, and feed it to the
     // client's retry handler exactly as `tryagain` would receive it.
-    let td_der = server.build_td_ephemeral_key_params().unwrap();
+    let td_der = server.build_td_ephemeral_key_params();
+    assert!(
+        !td_der.is_empty(),
+        "TD-EPHEMERAL-KEY-PARAMETERS must not be empty"
+    );
+
+    // Decodes to exactly the algorithms this KDC config allows: the
+    // configured KEM (MlKem1024) plus the default DH groups (Oakley2048 and
+    // Oakley4096, both encoded as `dhpublicnumber` — the EC groups fall
+    // below the default 2048-bit dh_min_bits floor and are absent).
+    let alg_ids: Vec<synta_certificate::AlgorithmIdentifier<'_>> =
+        synta::Decoder::new(&td_der, synta::Encoding::Der)
+            .decode()
+            .unwrap();
+    for alg_id in &alg_ids {
+        let oid = alg_id.algorithm.components();
+        assert!(
+            oid == KemAlgorithm::MlKem1024.oid()
+                || oid == synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER,
+            "unexpected algorithm OID in TD-EPHEMERAL-KEY-PARAMETERS: {oid:?}"
+        );
+    }
+    assert_eq!(
+        alg_ids
+            .iter()
+            .filter(|a| a.algorithm.components() == KemAlgorithm::MlKem1024.oid())
+            .count(),
+        1,
+        "expected exactly one KEM AlgorithmIdentifier"
+    );
+    assert_eq!(
+        alg_ids
+            .iter()
+            .filter(|a| a.algorithm.components()
+                == synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER)
+            .count(),
+        2,
+        "expected exactly two DH AlgorithmIdentifiers (Oakley2048 and Oakley4096)"
+    );
+
+    // Cached: repeated calls return byte-identical data rather than
+    // rebuilding it.
+    assert_eq!(
+        td_der,
+        server.build_td_ephemeral_key_params(),
+        "TD-EPHEMERAL-KEY-PARAMETERS should be cached and stable across calls"
+    );
+
     let padata = vec![synta_krb5::kerberos_v5::PaData {
         padata_type: synta_krb5::kerberos_v5::Int32::new_unchecked(
             synta_krb5::constants::TD_DH_PARAMETERS,
@@ -694,7 +741,7 @@ fn pkinit_kem_anonymous_exchange() {
     let mut client = PkinitClientState::new(anon_identity, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
-    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
 
     let req_body_der = b"anon-kem-req-body";
     let nonce = next_nonce();
@@ -766,7 +813,7 @@ fn pkinit_anonymous_rsa_exchange() {
     let mut client = PkinitClientState::new(anon_identity, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
-    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+    let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
 
     let req_body_der = b"anon-rsa-req-body";
     let nonce = next_nonce();

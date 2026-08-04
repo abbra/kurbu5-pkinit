@@ -66,7 +66,15 @@ impl KdcpreauthModule for PkinitKdc {
                 .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
         }
 
-        let state = PkinitKdcState::new(identity, trust_store, config.clone());
+        let state = PkinitKdcState::new(identity, trust_store, config.clone()).map_err(|e| {
+            pkinit_trace!(
+                ctx,
+                "PKINIT server initialization failed for realm {}: {}",
+                realm,
+                e
+            );
+            Krb5Error::Custom(libc::EINVAL)
+        })?;
         Ok(PkinitKdc { state, config })
     }
 
@@ -94,16 +102,12 @@ impl KdcpreauthModule for PkinitKdc {
             return;
         }
 
-        match self.state.build_supported_algorithms_hint() {
-            Ok(hint_der) => {
-                pkinit_trace!(
-                    ctx,
-                    "PKINIT server advertising supported algorithms in hint"
-                );
-                respond(Ok(Some(PaData::new(PA_PK_AS_REQ, hint_der))));
-            }
-            Err(_) => respond(Ok(None)),
-        }
+        let hint_der = self.state.build_supported_algorithms_hint();
+        pkinit_trace!(
+            ctx,
+            "PKINIT server advertising supported algorithms in hint"
+        );
+        respond(Ok(Some(PaData::new(PA_PK_AS_REQ, hint_der))));
     }
 
     fn verify(
@@ -187,13 +191,11 @@ impl PkinitKdc {
     fn error_response(&self, err: &PkinitError) -> VerifyResponse {
         match err.kem_error_class() {
             KemErrorClass::EphemeralKeyParamsNotAccepted => {
-                match self.state.build_td_ephemeral_key_params() {
-                    Ok(td_der) => VerifyResponse::err_with_edata(
-                        KRB5KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED,
-                        vec![PaData::new(synta_krb5::constants::TD_DH_PARAMETERS, td_der)],
-                    ),
-                    Err(_) => VerifyResponse::err(KRB5KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED),
-                }
+                let td_der = self.state.build_td_ephemeral_key_params();
+                VerifyResponse::err_with_edata(
+                    KRB5KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED,
+                    vec![PaData::new(synta_krb5::constants::TD_DH_PARAMETERS, td_der)],
+                )
             }
             KemErrorClass::NoAcceptableKdf => {
                 VerifyResponse::err(kurbu5_sys::KRB5KDC_ERR_NO_ACCEPTABLE_KDF)

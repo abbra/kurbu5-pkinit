@@ -34,15 +34,31 @@ pub struct PkinitKdcState {
     identity: PkinitIdentity,
     trust_store: TrustStore,
     config: PkinitKdcConfig,
+    /// Cache of [`Self::build_supported_algorithms_hint`]'s result: `config`
+    /// never changes after construction, so this DER blob is the same on
+    /// every call and would otherwise be redundantly rebuilt (OID
+    /// validation, ASN.1 encoding) on every AS-REQ lacking PA-DATA.
+    supported_algorithms_hint: Vec<u8>,
+    /// Cache of [`Self::build_td_ephemeral_key_params`]'s result, for the
+    /// same reason — rebuilt otherwise on every rejected AS-REQ.
+    td_ephemeral_key_params: Vec<u8>,
 }
 
 impl PkinitKdcState {
-    pub fn new(identity: PkinitIdentity, trust_store: TrustStore, config: PkinitKdcConfig) -> Self {
-        Self {
+    pub fn new(
+        identity: PkinitIdentity,
+        trust_store: TrustStore,
+        config: PkinitKdcConfig,
+    ) -> Result<Self, PkinitError> {
+        let supported_algorithms_hint = build_supported_algorithms_hint(&config)?;
+        let td_ephemeral_key_params = build_td_ephemeral_key_params(&config)?;
+        Ok(Self {
             identity,
             trust_store,
             config,
-        }
+            supported_algorithms_hint,
+            td_ephemeral_key_params,
+        })
     }
 
     /// Proactive advertisement (`PA-PK-AS-REQ-Hint.ephemeralKeyParameters`,
@@ -51,15 +67,8 @@ impl PkinitKdcState {
     /// from this hint, and meaningfully advertising a DH/ECDH group requires
     /// embedding real domain parameters, which is already done on the
     /// reactive path in [`Self::build_td_ephemeral_key_params`].
-    pub fn build_supported_algorithms_hint(&self) -> Result<Vec<u8>, PkinitError> {
-        let oids: Vec<&[u32]> = self
-            .config
-            .supported_kem_algorithms
-            .iter()
-            .chain(&self.config.supported_composite_kem_algorithms)
-            .map(|alg| alg.oid())
-            .collect();
-        crate::kem_types::encode_pkinit_hint(&oids)
+    pub fn build_supported_algorithms_hint(&self) -> Vec<u8> {
+        self.supported_algorithms_hint.clone()
     }
 
     /// `TD-EPHEMERAL-KEY-PARAMETERS-DATA` ({{sec-ephemeral-key-errors}}):
@@ -68,49 +77,8 @@ impl PkinitKdcState {
     /// with real parameters so the client's retry logic
     /// (`PkinitClientState::handle_tryagain`) can act on them directly, per
     /// {{RFC4556}} Section 3.2.2.
-    pub fn build_td_ephemeral_key_params(&self) -> Result<Vec<u8>, PkinitError> {
-        self.acceptable_key_establishment_alg_ids()?
-            .to_der()
-            .map_err(|e| PkinitError::Asn1(format!("encode TD params: {e}")))
-    }
-
-    /// Every acceptable `AlgorithmIdentifier` (KEM + composite KEM with
-    /// absent parameters per {{sec-alg-id-encoding}}; DH groups and EC
-    /// curves with their real domain parameters), for
-    /// [`Self::build_td_ephemeral_key_params`] to encode as a single
-    /// `SEQUENCE OF AlgorithmIdentifier`.
-    fn acceptable_key_establishment_alg_ids(
-        &self,
-    ) -> Result<Vec<synta_certificate::AlgorithmIdentifier<'static>>, PkinitError> {
-        use synta::ObjectIdentifier;
-        use synta_certificate::AlgorithmIdentifier;
-
-        let kem_ids = self
-            .config
-            .supported_kem_algorithms
-            .iter()
-            .chain(&self.config.supported_composite_kem_algorithms)
-            .map(|alg| {
-                let algorithm = ObjectIdentifier::new(alg.oid())
-                    .map_err(|e| PkinitError::Asn1(format!("KEM OID: {e}")))?;
-                Ok(AlgorithmIdentifier {
-                    algorithm,
-                    parameters: None,
-                })
-            });
-
-        let group_ids = [
-            DhGroup::Oakley2048,
-            DhGroup::Oakley4096,
-            DhGroup::EcP256,
-            DhGroup::EcP384,
-            DhGroup::EcP521,
-        ]
-        .into_iter()
-        .filter(|group| group.min_bits() >= self.config.dh_min_bits)
-        .map(group_algorithm_identifier);
-
-        kem_ids.chain(group_ids).collect()
+    pub fn build_td_ephemeral_key_params(&self) -> Vec<u8> {
+        self.td_ephemeral_key_params.clone()
     }
 
     /// Whether this KDC currently accepts `alg` on the KEM path.  Composite
@@ -479,6 +447,59 @@ impl PkinitKdcState {
     }
 }
 
+fn build_supported_algorithms_hint(config: &PkinitKdcConfig) -> Result<Vec<u8>, PkinitError> {
+    let oids: Vec<&[u32]> = config
+        .supported_kem_algorithms
+        .iter()
+        .chain(&config.supported_composite_kem_algorithms)
+        .map(|alg| alg.oid())
+        .collect();
+    crate::kem_types::encode_pkinit_hint(&oids)
+}
+
+fn build_td_ephemeral_key_params(config: &PkinitKdcConfig) -> Result<Vec<u8>, PkinitError> {
+    acceptable_key_establishment_alg_ids(config)?
+        .to_der()
+        .map_err(|e| PkinitError::Asn1(format!("encode TD params: {e}")))
+}
+
+/// Every acceptable `AlgorithmIdentifier` (KEM + composite KEM with absent
+/// parameters per {{sec-alg-id-encoding}}; DH groups and EC curves with
+/// their real domain parameters), for [`build_td_ephemeral_key_params`] to
+/// encode as a single `SEQUENCE OF AlgorithmIdentifier`.
+fn acceptable_key_establishment_alg_ids(
+    config: &PkinitKdcConfig,
+) -> Result<Vec<synta_certificate::AlgorithmIdentifier<'static>>, PkinitError> {
+    use synta::ObjectIdentifier;
+    use synta_certificate::AlgorithmIdentifier;
+
+    let kem_ids = config
+        .supported_kem_algorithms
+        .iter()
+        .chain(&config.supported_composite_kem_algorithms)
+        .map(|alg| {
+            let algorithm = ObjectIdentifier::new(alg.oid())
+                .map_err(|e| PkinitError::Asn1(format!("KEM OID: {e}")))?;
+            Ok(AlgorithmIdentifier {
+                algorithm,
+                parameters: None,
+            })
+        });
+
+    let group_ids = [
+        DhGroup::Oakley2048,
+        DhGroup::Oakley4096,
+        DhGroup::EcP256,
+        DhGroup::EcP384,
+        DhGroup::EcP521,
+    ]
+    .into_iter()
+    .filter(|group| group.min_bits() >= config.dh_min_bits)
+    .map(group_algorithm_identifier);
+
+    kem_ids.chain(group_ids).collect()
+}
+
 /// Build the `AlgorithmIdentifier` for a DH group or EC curve, carrying its
 /// real domain parameters (the Oakley prime/generator, or the curve OID) so
 /// a retrying client can validate it directly via `dh::validate_dh_params`.
@@ -679,7 +700,7 @@ mod tests {
     #[test]
     fn kdc_state_construction() {
         let (_, kdc_id, trust_store) = generate_test_pki();
-        let state = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+        let state = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
         assert!(state.config.require_eku);
     }
 
@@ -693,7 +714,7 @@ mod tests {
         let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
         client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
-        let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+        let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
 
         let req_body_der = b"mock-req-body";
         let ctime = 1719600000i64;
@@ -747,7 +768,7 @@ mod tests {
         let (_, kdc_id, trust_store) = generate_test_pki();
         let o2k = MockO2K;
 
-        let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default());
+        let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
 
         let kem_kp = KemKeyPair::generate(constants::KemAlgorithm::MlKem768).unwrap();
         let client_dh_public = kem_kp.public_key_spki_der().unwrap();
