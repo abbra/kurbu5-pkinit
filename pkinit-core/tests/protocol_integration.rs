@@ -199,8 +199,10 @@ fn run_dh_exchange(key_type: TestKeyType, dh_group: DhGroup, enctype: i32) {
     let (client_id, kdc_id, trust_store) = generate_test_pki(key_type);
     let o2k = TestO2K;
 
-    let mut client_config = PkinitClientConfig::default();
-    client_config.dh_group = dh_group;
+    let client_config = PkinitClientConfig {
+        dh_group,
+        ..Default::default()
+    };
     let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
@@ -265,8 +267,10 @@ fn run_anonymous_exchange(dh_group: DhGroup) {
         chain: vec![],
     };
 
-    let mut client_config = PkinitClientConfig::default();
-    client_config.dh_group = dh_group;
+    let client_config = PkinitClientConfig {
+        dh_group,
+        ..Default::default()
+    };
     let mut client = PkinitClientState::new(anon_identity, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
@@ -376,8 +380,10 @@ fn run_kem_exchange(kem_alg: KemAlgorithm, enctype: i32) {
     let (client_id, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
     let o2k = TestO2K;
 
-    let mut client_config = PkinitClientConfig::default();
-    client_config.kem_algorithm = Some(kem_alg);
+    let client_config = PkinitClientConfig {
+        kem_algorithm: Some(kem_alg),
+        ..Default::default()
+    };
     let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
@@ -462,13 +468,17 @@ fn run_composite_kem_exchange(kem_alg: KemAlgorithm, enctype: i32) {
     let (client_id, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
     let o2k = TestO2K;
 
-    let mut client_config = PkinitClientConfig::default();
-    client_config.kem_algorithm = Some(kem_alg);
+    let client_config = PkinitClientConfig {
+        kem_algorithm: Some(kem_alg),
+        ..Default::default()
+    };
     let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
-    let mut kdc_config = PkinitKdcConfig::default();
-    kdc_config.supported_composite_kem_algorithms = vec![kem_alg];
+    let kdc_config = PkinitKdcConfig {
+        supported_composite_kem_algorithms: vec![kem_alg],
+        ..Default::default()
+    };
     let server = PkinitKdcState::new(kdc_id, trust_store, kdc_config).unwrap();
 
     let req_body_der = b"test-composite-kem-req-body";
@@ -547,8 +557,10 @@ fn pkinit_kem_composite_not_opted_in_is_rejected() {
     // support is compiled in — default KDC config has an empty composite list.
     let (client_id, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
 
-    let mut client_config = PkinitClientConfig::default();
-    client_config.kem_algorithm = Some(KemAlgorithm::MlKem768EcdhP256);
+    let client_config = PkinitClientConfig {
+        kem_algorithm: Some(KemAlgorithm::MlKem768EcdhP256),
+        ..Default::default()
+    };
     let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
@@ -581,13 +593,17 @@ fn pkinit_kem_unsupported_algorithm_td_data_enables_retry() {
     let (client_id, kdc_id, trust_store) = generate_test_pki(TestKeyType::EcP256);
     let o2k = TestO2K;
 
-    let mut client_config = PkinitClientConfig::default();
-    client_config.kem_algorithm = Some(KemAlgorithm::MlKem768);
+    let client_config = PkinitClientConfig {
+        kem_algorithm: Some(KemAlgorithm::MlKem768),
+        ..Default::default()
+    };
     let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
-    let mut kdc_config = PkinitKdcConfig::default();
-    kdc_config.supported_kem_algorithms = vec![KemAlgorithm::MlKem1024]; // rejects MlKem768
+    let kdc_config = PkinitKdcConfig {
+        supported_kem_algorithms: vec![KemAlgorithm::MlKem1024], // rejects MlKem768
+        ..Default::default()
+    };
     let server = PkinitKdcState::new(kdc_id, trust_store, kdc_config).unwrap();
 
     let req_body_der = b"td-retry-req-body";
@@ -736,8 +752,10 @@ fn pkinit_kem_anonymous_exchange() {
         chain: vec![],
     };
 
-    let mut client_config = PkinitClientConfig::default();
-    client_config.kem_algorithm = Some(KemAlgorithm::MlKem768);
+    let client_config = PkinitClientConfig {
+        kem_algorithm: Some(KemAlgorithm::MlKem768),
+        ..Default::default()
+    };
     let mut client = PkinitClientState::new(anon_identity, trust_store.clone(), client_config);
     client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
@@ -804,8 +822,10 @@ fn pkinit_anonymous_rsa_exchange() {
         chain: vec![],
     };
 
-    let mut client_config = PkinitClientConfig::default();
-    client_config.dh_group = DhGroup::EcP256;
+    let client_config = PkinitClientConfig {
+        dh_group: DhGroup::EcP256,
+        ..Default::default()
+    };
 
     // KDC uses RSA-2048 cert
     let (_, kdc_id, _) = generate_test_pki(TestKeyType::Rsa2048);

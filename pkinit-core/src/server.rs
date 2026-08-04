@@ -701,8 +701,10 @@ mod tests {
         let (client_id, kdc_id, trust_store) = generate_test_pki();
         let o2k = MockO2K;
 
-        let mut client_config = PkinitClientConfig::default();
-        client_config.dh_group = DhGroup::EcP256;
+        let client_config = PkinitClientConfig {
+            dh_group: DhGroup::EcP256,
+            ..Default::default()
+        };
         let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
         client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
 
