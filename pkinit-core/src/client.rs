@@ -327,11 +327,7 @@ impl PkinitClientState {
 
         let kdc_pub_bits = kdc_dh_key_info.subject_public_key.as_bytes();
 
-        let kdc_spki_der = if dh_key.group().is_ec() {
-            rebuild_ec_spki(dh_key.group(), kdc_pub_bits)?
-        } else {
-            rebuild_dh_spki(dh_key.group(), kdc_pub_bits)?
-        };
+        let kdc_spki_der = rebuild_spki(dh_key.group(), kdc_pub_bits)?;
 
         let shared_secret = dh_key.derive_shared_secret(&kdc_spki_der)?;
 
@@ -548,28 +544,17 @@ fn parse_td_dh_parameters(data: &[u8], min_bits: u32) -> Option<DhGroup> {
     None
 }
 
-fn rebuild_ec_spki(group: DhGroup, pub_key_bits: &[u8]) -> Result<Vec<u8>, PkinitError> {
-    let curve_oid = match group {
-        DhGroup::EcP256 => synta_krb5::pkix1_algorithms2008::SECP256R1,
-        DhGroup::EcP384 => synta_krb5::pkix1_algorithms2008::SECP384R1,
-        DhGroup::EcP521 => synta_krb5::pkix1_algorithms2008::SECP521R1,
-        _ => return Err(PkinitError::DhParamsRejected("not an EC group".into())),
-    };
-
-    let curve_oid_obj = synta::ObjectIdentifier::new(curve_oid)
-        .map_err(|e| PkinitError::Asn1(format!("curve OID: {e}")))?;
-    let curve_oid_der = curve_oid_obj
-        .to_der()
-        .map_err(|e| PkinitError::Asn1(format!("encode curve OID: {e}")))?;
-    let curve_element: synta::Element<'_> =
-        synta::Decoder::new(&curve_oid_der, synta::Encoding::Der)
-            .decode()
-            .map_err(|e| PkinitError::Asn1(format!("decode curve element: {e}")))?;
+/// Rebuild the KDC's SubjectPublicKeyInfo for `group` from its raw public
+/// key bits, so `DhKeyPair::derive_shared_secret` can consume it — the KDC's
+/// `KDCDHKeyInfo.subjectPublicKey` carries only the bare key, not a full
+/// SPKI, per {{RFC4556}} Section 3.2.3.1.
+fn rebuild_spki(group: DhGroup, pub_key_bits: &[u8]) -> Result<Vec<u8>, PkinitError> {
+    let (algorithm, parameters) = dh::group_algorithm_oid_and_params(group)?;
 
     let alg_id = synta_krb5::kerberos_v5_pkinit_agility::AlgorithmIdentifier {
-        algorithm: synta::ObjectIdentifier::new(synta_krb5::pkix1_algorithms2008::ID_EC_PUBLIC_KEY)
-            .map_err(|e| PkinitError::Asn1(format!("EC OID: {e}")))?,
-        parameters: Some(curve_element),
+        algorithm: synta::ObjectIdentifier::new(algorithm)
+            .map_err(|e| PkinitError::Asn1(format!("algorithm OID: {e}")))?,
+        parameters,
     };
 
     let spki = synta_krb5::kerberos_v5_pkinit_agility::SubjectPublicKeyInfo {
@@ -579,31 +564,7 @@ fn rebuild_ec_spki(group: DhGroup, pub_key_bits: &[u8]) -> Result<Vec<u8>, Pkini
     };
 
     spki.to_der()
-        .map_err(|e| PkinitError::Asn1(format!("encode EC SPKI: {e}")))
-}
-
-fn rebuild_dh_spki(group: DhGroup, pub_key_bits: &[u8]) -> Result<Vec<u8>, PkinitError> {
-    let params_der = dh::group_params_der(group)
-        .ok_or_else(|| PkinitError::DhParamsRejected("unknown DH group".into()))?;
-
-    let params_element: synta::Element<'_> = synta::Decoder::new(params_der, synta::Encoding::Der)
-        .decode()
-        .map_err(|e| PkinitError::Asn1(format!("decode DH params: {e}")))?;
-
-    let alg_id = synta_krb5::kerberos_v5_pkinit_agility::AlgorithmIdentifier {
-        algorithm: synta::ObjectIdentifier::new(synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER)
-            .map_err(|e| PkinitError::Asn1(format!("DH OID: {e}")))?,
-        parameters: Some(params_element),
-    };
-
-    let spki = synta_krb5::kerberos_v5_pkinit_agility::SubjectPublicKeyInfo {
-        algorithm: alg_id,
-        subject_public_key: synta::BitString::new(pub_key_bits.to_vec(), 0)
-            .map_err(|e| PkinitError::Asn1(format!("BitString: {e}")))?,
-    };
-
-    spki.to_der()
-        .map_err(|e| PkinitError::Asn1(format!("encode DH SPKI: {e}")))
+        .map_err(|e| PkinitError::Asn1(format!("encode SPKI: {e}")))
 }
 
 fn is_pq_signature_algorithm(oid: &[u32]) -> bool {
