@@ -52,15 +52,13 @@ impl PkinitKdcState {
     /// embedding real domain parameters, which is already done on the
     /// reactive path in [`Self::build_td_ephemeral_key_params`].
     pub fn build_supported_algorithms_hint(&self) -> Result<Vec<u8>, PkinitError> {
-        let mut oids: Vec<&[u32]> = Vec::new();
-        for alg in self
+        let oids: Vec<&[u32]> = self
             .config
             .supported_kem_algorithms
             .iter()
             .chain(&self.config.supported_composite_kem_algorithms)
-        {
-            oids.push(alg.oid());
-        }
+            .map(|alg| alg.oid())
+            .collect();
         crate::kem_types::encode_pkinit_hint(&oids)
     }
 
@@ -71,116 +69,54 @@ impl PkinitKdcState {
     /// (`PkinitClientState::handle_tryagain`) can act on them directly, per
     /// {{RFC4556}} Section 3.2.2.
     pub fn build_td_ephemeral_key_params(&self) -> Result<Vec<u8>, PkinitError> {
-        let entries = self.acceptable_key_establishment_algorithm_ders()?;
-        let mut content = Vec::new();
-        for entry in &entries {
-            content.extend_from_slice(entry);
-        }
-        let mut out = Vec::with_capacity(4 + content.len());
-        out.push(0x30); // SEQUENCE
-        crate::kem_types::der_encode_length(content.len(), &mut out);
-        out.extend_from_slice(&content);
-        Ok(out)
+        use synta::Encode;
+
+        let alg_ids = self.acceptable_key_establishment_alg_ids()?;
+        let mut enc = synta::Encoder::new(synta::Encoding::Der);
+        alg_ids
+            .encode(&mut enc)
+            .map_err(|e| PkinitError::Asn1(format!("encode TD params: {e}")))?;
+        enc.finish()
+            .map_err(|e| PkinitError::Asn1(format!("finish TD params: {e}")))
     }
 
-    /// DER-encode each acceptable `AlgorithmIdentifier` individually (KEM +
-    /// composite KEM with absent parameters per {{sec-alg-id-encoding}}; DH
-    /// groups and EC curves with their real domain parameters).  Returned as
-    /// separate DER blobs so the caller can concatenate them into a
-    /// `SEQUENCE OF AlgorithmIdentifier` without further ASN.1 tooling.
-    fn acceptable_key_establishment_algorithm_ders(&self) -> Result<Vec<Vec<u8>>, PkinitError> {
-        use synta::{Encode, ObjectIdentifier};
+    /// Every acceptable `AlgorithmIdentifier` (KEM + composite KEM with
+    /// absent parameters per {{sec-alg-id-encoding}}; DH groups and EC
+    /// curves with their real domain parameters), for
+    /// [`Self::build_td_ephemeral_key_params`] to encode as a single
+    /// `SEQUENCE OF AlgorithmIdentifier`.
+    fn acceptable_key_establishment_alg_ids(
+        &self,
+    ) -> Result<Vec<synta_certificate::AlgorithmIdentifier<'static>>, PkinitError> {
+        use synta::ObjectIdentifier;
         use synta_certificate::AlgorithmIdentifier;
 
-        let mut ders = Vec::new();
-
-        for alg in self
+        let kem_ids = self
             .config
             .supported_kem_algorithms
             .iter()
             .chain(&self.config.supported_composite_kem_algorithms)
-        {
-            let oid = ObjectIdentifier::new(alg.oid())
-                .map_err(|e| PkinitError::Asn1(format!("KEM OID: {e}")))?;
-            let alg_id = AlgorithmIdentifier {
-                algorithm: oid,
-                parameters: None,
-            };
-            let mut enc = synta::Encoder::new(synta::Encoding::Der);
-            alg_id
-                .encode(&mut enc)
-                .map_err(|e| PkinitError::Asn1(format!("encode KEM alg id: {e}")))?;
-            ders.push(
-                enc.finish()
-                    .map_err(|e| PkinitError::Asn1(format!("finish KEM alg id: {e}")))?,
-            );
-        }
+            .map(|alg| {
+                let algorithm = ObjectIdentifier::new(alg.oid())
+                    .map_err(|e| PkinitError::Asn1(format!("KEM OID: {e}")))?;
+                Ok(AlgorithmIdentifier {
+                    algorithm,
+                    parameters: None,
+                })
+            });
 
-        for group in [
+        let group_ids = [
             DhGroup::Oakley2048,
             DhGroup::Oakley4096,
             DhGroup::EcP256,
             DhGroup::EcP384,
             DhGroup::EcP521,
-        ] {
-            if group.min_bits() < self.config.dh_min_bits {
-                continue;
-            }
+        ]
+        .into_iter()
+        .filter(|group| group.min_bits() >= self.config.dh_min_bits)
+        .map(group_algorithm_identifier);
 
-            let alg_id_der = if group.is_ec() {
-                let curve = match group {
-                    DhGroup::EcP256 => synta_krb5::pkix1_algorithms2008::SECP256R1,
-                    DhGroup::EcP384 => synta_krb5::pkix1_algorithms2008::SECP384R1,
-                    DhGroup::EcP521 => synta_krb5::pkix1_algorithms2008::SECP521R1,
-                    _ => unreachable!("non-EC group in EC branch"),
-                };
-                let curve_oid = ObjectIdentifier::new(curve)
-                    .map_err(|e| PkinitError::Asn1(format!("curve OID: {e}")))?;
-                let curve_der = curve_oid
-                    .to_der()
-                    .map_err(|e| PkinitError::Asn1(format!("encode curve OID: {e}")))?;
-                let curve_element: synta::Element<'_> =
-                    synta::Decoder::new(&curve_der, synta::Encoding::Der)
-                        .decode()
-                        .map_err(|e| PkinitError::Asn1(format!("decode curve element: {e}")))?;
-                let alg_id = AlgorithmIdentifier {
-                    algorithm: ObjectIdentifier::new(
-                        synta_krb5::pkix1_algorithms2008::ID_EC_PUBLIC_KEY,
-                    )
-                    .map_err(|e| PkinitError::Asn1(format!("EC OID: {e}")))?,
-                    parameters: Some(curve_element),
-                };
-                let mut enc = synta::Encoder::new(synta::Encoding::Der);
-                alg_id
-                    .encode(&mut enc)
-                    .map_err(|e| PkinitError::Asn1(format!("encode EC alg id: {e}")))?;
-                enc.finish()
-                    .map_err(|e| PkinitError::Asn1(format!("finish EC alg id: {e}")))?
-            } else {
-                let params_der = dh::group_params_der(group)
-                    .ok_or_else(|| PkinitError::DhParamsRejected("unknown DH group".into()))?;
-                let params_element: synta::Element<'_> =
-                    synta::Decoder::new(params_der, synta::Encoding::Der)
-                        .decode()
-                        .map_err(|e| PkinitError::Asn1(format!("decode DH params: {e}")))?;
-                let alg_id = AlgorithmIdentifier {
-                    algorithm: ObjectIdentifier::new(
-                        synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER,
-                    )
-                    .map_err(|e| PkinitError::Asn1(format!("DH OID: {e}")))?,
-                    parameters: Some(params_element),
-                };
-                let mut enc = synta::Encoder::new(synta::Encoding::Der);
-                alg_id
-                    .encode(&mut enc)
-                    .map_err(|e| PkinitError::Asn1(format!("encode DH alg id: {e}")))?;
-                enc.finish()
-                    .map_err(|e| PkinitError::Asn1(format!("finish DH alg id: {e}")))?
-            };
-            ders.push(alg_id_der);
-        }
-
-        Ok(ders)
+        kem_ids.chain(group_ids).collect()
     }
 
     /// Whether this KDC currently accepts `alg` on the KEM path.  Composite
@@ -546,6 +482,44 @@ impl PkinitKdcState {
         };
 
         Ok((pa_rep_der, derived_key))
+    }
+}
+
+/// Build the `AlgorithmIdentifier` for a DH group or EC curve, carrying its
+/// real domain parameters (the Oakley prime/generator, or the curve OID) so
+/// a retrying client can validate it directly via `dh::validate_dh_params`.
+fn group_algorithm_identifier(
+    group: DhGroup,
+) -> Result<synta_certificate::AlgorithmIdentifier<'static>, PkinitError> {
+    use synta::{Element, ObjectIdentifier};
+    use synta_certificate::AlgorithmIdentifier;
+
+    if group.is_ec() {
+        let curve = match group {
+            DhGroup::EcP256 => synta_krb5::pkix1_algorithms2008::SECP256R1,
+            DhGroup::EcP384 => synta_krb5::pkix1_algorithms2008::SECP384R1,
+            DhGroup::EcP521 => synta_krb5::pkix1_algorithms2008::SECP521R1,
+            _ => unreachable!("non-EC group in EC branch"),
+        };
+        let curve_oid = ObjectIdentifier::new(curve)
+            .map_err(|e| PkinitError::Asn1(format!("curve OID: {e}")))?;
+        Ok(AlgorithmIdentifier {
+            algorithm: ObjectIdentifier::new(synta_krb5::pkix1_algorithms2008::ID_EC_PUBLIC_KEY)
+                .map_err(|e| PkinitError::Asn1(format!("EC OID: {e}")))?,
+            parameters: Some(Element::ObjectIdentifier(curve_oid)),
+        })
+    } else {
+        let params_der = dh::group_params_der(group)
+            .ok_or_else(|| PkinitError::DhParamsRejected("unknown DH group".into()))?;
+        let params_element: Element<'static> =
+            synta::Decoder::new(params_der, synta::Encoding::Der)
+                .decode()
+                .map_err(|e| PkinitError::Asn1(format!("decode DH params: {e}")))?;
+        Ok(AlgorithmIdentifier {
+            algorithm: ObjectIdentifier::new(synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER)
+                .map_err(|e| PkinitError::Asn1(format!("DH OID: {e}")))?,
+            parameters: Some(params_element),
+        })
     }
 }
 
