@@ -627,8 +627,10 @@ mod tests {
 
     #[test]
     fn process_pkinit_hint_keeps_matching_kem() {
-        let mut config = PkinitClientConfig::default();
-        config.kem_algorithm = Some(KemAlgorithm::MlKem1024);
+        let config = PkinitClientConfig {
+            kem_algorithm: Some(KemAlgorithm::MlKem1024),
+            ..Default::default()
+        };
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: vec![],
