@@ -94,6 +94,19 @@ impl PkinitClientState {
         self.kdc_hostname = hostname;
     }
 
+    /// Override the DH/ECDH group used for the next `build_as_req()` call,
+    /// forcing the classical (non-KEM) key-exchange path even if a KEM
+    /// algorithm was configured. For callers that expose per-call
+    /// algorithm selection after the state is already constructed (e.g.
+    /// Heimdal's `kinit --key-agreement`), where `PkinitClientConfig` is
+    /// no longer reachable.
+    pub fn set_dh_group(&mut self, group: DhGroup) {
+        self.config.dh_group = group;
+        self.config.kem_algorithm = None;
+        self.dh_key = None;
+        self.kem_key = None;
+    }
+
     pub fn process_pkinit_hint(&mut self, hint_der: &[u8]) -> Result<(), PkinitError> {
         let oids = crate::kem_types::parse_pkinit_hint(hint_der)?;
 
