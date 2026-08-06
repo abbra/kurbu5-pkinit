@@ -294,6 +294,7 @@ impl PkinitClientState {
         let as_req_der = params.as_req_der;
         let client_name = params.client_name;
         let server_name = params.server_name;
+        let pa_rep_raw = params.pa_rep_raw;
         let verified = cms::verify_signed_data(dh_rep_info.dh_signed_data.as_bytes())?;
 
         if verified.content_type.as_slice() != synta_krb5::pkinit::ID_PKINIT_DHKEY_DATA {
@@ -360,7 +361,7 @@ impl PkinitClientState {
                     party_u_info: &party_u,
                     party_v_info: &party_v,
                     as_req_der,
-                    pa_pk_as_rep_der: params.pa_rep_raw,
+                    pa_pk_as_rep_der: pa_rep_raw,
                 },
                 o2k,
             )
