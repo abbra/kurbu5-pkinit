@@ -94,12 +94,15 @@ impl PkinitClientState {
         self.kdc_hostname = hostname;
     }
 
-    /// Override the DH/ECDH group used for the next `build_as_req()` call,
-    /// forcing the classical (non-KEM) key-exchange path even if a KEM
-    /// algorithm was configured. For callers that expose per-call
-    /// algorithm selection after the state is already constructed (e.g.
-    /// Heimdal's `kinit --key-agreement`), where `PkinitClientConfig` is
-    /// no longer reachable.
+    /// Override the DH/ECDH group used by `build_as_req()`, forcing the
+    /// classical (non-KEM) key-exchange path even if a KEM algorithm was
+    /// configured. This is a persistent change, not a one-shot override:
+    /// it applies to every `build_as_req()` call from this point on, until
+    /// `set_dh_group()` or `process_pkinit_hint()` changes the algorithm
+    /// again. For callers that expose per-call algorithm selection after
+    /// the state is already constructed (e.g. Heimdal's
+    /// `kinit --key-agreement`), where `PkinitClientConfig` is no longer
+    /// reachable.
     pub fn set_dh_group(&mut self, group: DhGroup) {
         self.config.dh_group = group;
         self.config.kem_algorithm = None;
