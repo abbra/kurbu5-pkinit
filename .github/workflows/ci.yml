@@ -193,6 +193,8 @@ jobs:
   system-test:
     name: System Test
     needs: [build]
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     container: quay.io/fedora/fedora:latest
     steps:
