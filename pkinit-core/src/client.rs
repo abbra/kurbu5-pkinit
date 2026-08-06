@@ -502,8 +502,7 @@ impl PkinitClientState {
                             "PQ client must not fall back to classical DH".into(),
                         ));
                     }
-                    self.dh_key = None;
-                    self.config.kem_algorithm = None;
+                    self.set_dh_group(group);
                     return Ok(RetryAction::RetryWithDhParams(group));
                 }
 
