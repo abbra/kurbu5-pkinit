@@ -32,6 +32,9 @@ pub enum PkinitError {
     #[error("identity load failed: {0}")]
     IdentityLoadFailed(String),
 
+    #[error("PKCS#12 identity requires a password")]
+    Pkcs12PasswordRequired,
+
     #[error("certificate chain validation failed: {0}")]
     ChainValidationFailed(String),
 

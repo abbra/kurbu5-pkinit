@@ -86,8 +86,12 @@ impl PkinitIdentity {
             PkinitError::IdentityLoadFailed(format!("reading PKCS#12 {}: {e}", path.display()))
         })?;
 
-        let pki = synta_certificate::pki_from_pkcs12(&data, password, &OpensslDecryptor)
-            .map_err(|e| PkinitError::IdentityLoadFailed(format!("parsing PKCS#12: {e}")))?;
+        let pki = synta_certificate::pki_from_pkcs12(&data, password, &OpensslDecryptor).map_err(
+            |e| match e {
+                synta_certificate::Pkcs12Error::Crypto(_) => PkinitError::Pkcs12PasswordRequired,
+                other => PkinitError::IdentityLoadFailed(format!("parsing PKCS#12: {other}")),
+            },
+        )?;
 
         let cert_der = pki
             .certs
@@ -161,7 +165,9 @@ fn extract_private_key(blocks: &[(String, Vec<u8>)]) -> Result<Vec<u8>, PkinitEr
 mod tests {
     use super::*;
     use synta::{Integer, UtcTime};
-    use synta_certificate::{CertificateBuilder, NameBuilder, Time};
+    use synta_certificate::{
+        CertificateBuilder, NameBuilder, OpensslPkcs12Encryptor, Pkcs12Builder, Time,
+    };
 
     fn generate_test_cert_and_key() -> (Vec<u8>, Vec<u8>) {
         let ossl_pkey = {
@@ -287,5 +293,48 @@ mod tests {
         assert_eq!(identity.cert_der, ee_cert_der);
         assert_eq!(identity.chain.len(), 1);
         assert_eq!(identity.chain[0], ca_cert_der);
+    }
+
+    const TEST_PKCS12_PASSWORD: &[u8] = b"correct-horse-battery-staple";
+    const TEST_PKCS12_WRONG_PASSWORD: &[u8] = b"wrong-password";
+
+    fn make_test_pkcs12() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let (cert_der, pkcs8_der) = generate_test_cert_and_key();
+        let pfx_der = Pkcs12Builder::new()
+            .certificate(&cert_der)
+            .private_key(&pkcs8_der)
+            .build(TEST_PKCS12_PASSWORD, &OpensslPkcs12Encryptor::new())
+            .expect("build PKCS#12");
+        (pfx_der, cert_der, pkcs8_der)
+    }
+
+    #[test]
+    fn load_pkcs12_wrong_password_requires_password() {
+        let (pfx_der, _, _) = make_test_pkcs12();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p12_path = dir.path().join("identity.p12");
+        std::fs::write(&p12_path, &pfx_der).unwrap();
+
+        // `PkinitIdentity` deliberately doesn't implement `Debug` (it holds key
+        // material), so `unwrap_err()` would fail to compile here; map the Ok
+        // side away first.
+        let err = PkinitIdentity::load_pkcs12(&p12_path, TEST_PKCS12_WRONG_PASSWORD)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(matches!(err, PkinitError::Pkcs12PasswordRequired));
+    }
+
+    #[test]
+    fn load_pkcs12_correct_password_succeeds() {
+        let (pfx_der, cert_der, pkcs8_der) = make_test_pkcs12();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p12_path = dir.path().join("identity.p12");
+        std::fs::write(&p12_path, &pfx_der).unwrap();
+
+        let identity = PkinitIdentity::load_pkcs12(&p12_path, TEST_PKCS12_PASSWORD).unwrap();
+        assert_eq!(identity.cert_der, cert_der);
+        assert_eq!(identity.key_pkcs8_der, pkcs8_der);
     }
 }
