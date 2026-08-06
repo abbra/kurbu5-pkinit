@@ -105,11 +105,13 @@ impl PkinitClientState {
         self.config.kem_algorithm = None;
         self.dh_key = None;
         self.kem_key = None;
+        self.key_exchange = None;
     }
 
     fn set_kem_algorithm(&mut self, kem_alg: KemAlgorithm) {
         self.config.kem_algorithm = Some(kem_alg);
         self.kem_key = None;
+        self.key_exchange = None;
     }
 
     pub fn process_pkinit_hint(&mut self, hint_der: &[u8]) -> Result<(), PkinitError> {
