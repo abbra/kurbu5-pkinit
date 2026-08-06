@@ -104,7 +104,7 @@ under `[libdefaults]` / `[realms]` (client) and `[kdcdefaults]` / `[realms]`
 
 | Option | Applies to | Purpose |
 |---|---|---|
-| `pkinit_identities` / `pkinit_identity` | client / KDC | Identity source (file, dir, PKCS#12, or PKCS#11 URI) |
+| `pkinit_identities` / `pkinit_identity` | client / KDC | Identity source (file, dir, PKCS#12, or PKCS#11 URI). A password-protected PKCS#12 file is never given a password in this setting — the client asks for one via the krb5 responder interface (question key `pkinit_pkcs12_password`); callers that don't register a responder (e.g. plain `kinit`) will get a clear failure instead of a silent empty-password attempt. |
 | `pkinit_anchors` | both | Trusted CA certificates |
 | `pkinit_pool` | both | Intermediate certificates |
 | `pkinit_revoke` | both | CRLs |
