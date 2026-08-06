@@ -86,12 +86,8 @@ impl PkinitIdentity {
             PkinitError::IdentityLoadFailed(format!("reading PKCS#12 {}: {e}", path.display()))
         })?;
 
-        let pki = synta_certificate::pki_from_pkcs12(&data, password, &OpensslDecryptor).map_err(
-            |e| match e {
-                synta_certificate::Pkcs12Error::Crypto(_) => PkinitError::Pkcs12PasswordRequired,
-                other => PkinitError::IdentityLoadFailed(format!("parsing PKCS#12: {other}")),
-            },
-        )?;
+        let pki = synta_certificate::pki_from_pkcs12(&data, password, &OpensslDecryptor)
+            .map_err(map_pkcs12_error)?;
 
         let cert_der = pki
             .certs
@@ -132,6 +128,22 @@ impl PkinitIdentity {
             PkinitError::IdentityLoadFailed(format!("reading env var {key_var}: {e}"))
         })?;
         Self::load_file(Path::new(&cert_path_str), Path::new(&key_path_str))
+    }
+}
+
+/// Only an actual failed decrypt (wrong key, i.e. wrong password) should
+/// trigger a responder retry with a different password. `UnsupportedAlgorithm`
+/// means the archive uses a cipher this build doesn't implement (e.g. legacy
+/// RC2-40-CBC) — no password would ever fix that, so it must not be conflated
+/// with `Pkcs12PasswordRequired`.
+fn map_pkcs12_error(
+    e: synta_certificate::Pkcs12Error<synta_certificate::OpensslDecryptorError>,
+) -> PkinitError {
+    match e {
+        synta_certificate::Pkcs12Error::Crypto(
+            synta_certificate::OpensslDecryptorError::Openssl(_),
+        ) => PkinitError::Pkcs12PasswordRequired,
+        other => PkinitError::IdentityLoadFailed(format!("parsing PKCS#12: {other}")),
     }
 }
 
@@ -336,5 +348,18 @@ mod tests {
         let identity = PkinitIdentity::load_pkcs12(&p12_path, TEST_PKCS12_PASSWORD).unwrap();
         assert_eq!(identity.cert_der, cert_der);
         assert_eq!(identity.key_pkcs8_der, pkcs8_der);
+    }
+
+    #[test]
+    fn unsupported_pkcs12_algorithm_is_not_a_password_prompt() {
+        // A legacy cipher this build doesn't implement (e.g. RC2-40-CBC, still
+        // common in PKCS#12 files produced by older tools) must not be
+        // reported as "needs a password" -- no password would ever fix it.
+        let err = map_pkcs12_error(synta_certificate::Pkcs12Error::Crypto(
+            synta_certificate::OpensslDecryptorError::UnsupportedAlgorithm(
+                "pbeWithSHA1And40BitRC2-CBC".into(),
+            ),
+        ));
+        assert!(matches!(err, PkinitError::IdentityLoadFailed(_)));
     }
 }
