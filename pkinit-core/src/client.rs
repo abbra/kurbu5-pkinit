@@ -169,8 +169,7 @@ impl PkinitClientState {
 
         let use_kem = self.config.kem_algorithm.is_some();
 
-        let client_spki_der = if use_kem {
-            let kem_alg = self.config.kem_algorithm.unwrap();
+        let client_spki_der = if let Some(kem_alg) = self.config.kem_algorithm {
             self.key_exchange = Some(KeyExchangeType::Kem(kem_alg));
             if self.kem_key.is_none() {
                 self.kem_key = Some(KemKeyPair::generate(kem_alg)?);
