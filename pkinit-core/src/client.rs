@@ -107,6 +107,11 @@ impl PkinitClientState {
         self.kem_key = None;
     }
 
+    fn set_kem_algorithm(&mut self, kem_alg: KemAlgorithm) {
+        self.config.kem_algorithm = Some(kem_alg);
+        self.kem_key = None;
+    }
+
     pub fn process_pkinit_hint(&mut self, hint_der: &[u8]) -> Result<(), PkinitError> {
         let oids = crate::kem_types::parse_pkinit_hint(hint_der)?;
 
@@ -122,8 +127,7 @@ impl PkinitClientState {
 
         for oid in &oids {
             if let Some(kem_alg) = KemAlgorithm::from_oid(oid) {
-                self.config.kem_algorithm = Some(kem_alg);
-                self.kem_key = None;
+                self.set_kem_algorithm(kem_alg);
                 return Ok(());
             }
         }
@@ -488,8 +492,7 @@ impl PkinitClientState {
                 let data = pa.padata_value.as_bytes();
 
                 if let Some(kem_alg) = parse_td_kem_algorithm(data) {
-                    self.kem_key = None;
-                    self.config.kem_algorithm = Some(kem_alg);
+                    self.set_kem_algorithm(kem_alg);
                     return Ok(RetryAction::RetryWithKemAlgorithm(kem_alg));
                 }
 
