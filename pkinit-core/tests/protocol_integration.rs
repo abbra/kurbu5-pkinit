@@ -5,17 +5,8 @@ use pkinit_core::crypto::kdf::OctetString2Key;
 use pkinit_core::error::PkinitError;
 use pkinit_core::identity::{PkinitIdentity, TrustStore};
 use pkinit_core::server::{BuildAsRepParams, PkinitKdcState};
+use pkinit_core::test_support::next_nonce;
 use synta_certificate::crypto::{BackendPrivateKey, PrivateKey};
-
-use std::sync::atomic::{AtomicI32, Ordering};
-
-/// A fresh nonce for each AS-REQ, generated once per exchange and threaded
-/// through every step (`build_as_req` -> `BuildAsRepParams` -> `AsRepParams`)
-/// instead of hardcoding the same literal at each call site.
-fn next_nonce() -> i32 {
-    static NEXT: AtomicI32 = AtomicI32::new(1);
-    NEXT.fetch_add(1, Ordering::Relaxed)
-}
 
 struct TestO2K;
 
