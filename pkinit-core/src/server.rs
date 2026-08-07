@@ -529,6 +529,7 @@ mod tests {
     use crate::client::PkinitClientState;
     use crate::config::{PkinitClientConfig, PkinitKdcConfig};
     use crate::constants;
+    use crate::test_support::next_nonce;
 
     struct MockO2K;
     impl crate::crypto::kdf::OctetString2Key for MockO2K {
@@ -712,7 +713,8 @@ mod tests {
 
         let req_body_der = b"mock-req-body";
         let ctime = 1719600000i64;
-        let pa_req = client.build_as_req(12345, ctime, 0, req_body_der).unwrap();
+        let nonce = next_nonce();
+        let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
 
         let verified = server
             .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
@@ -726,7 +728,7 @@ mod tests {
             .build_as_rep(
                 &verified,
                 &BuildAsRepParams {
-                    nonce: 12345,
+                    nonce,
                     enctype: 18,
                     as_req_der,
                     client_name,
@@ -740,7 +742,7 @@ mod tests {
             .process_as_rep(
                 &pa_rep,
                 &crate::client::AsRepParams {
-                    nonce: 12345,
+                    nonce,
                     enctype: 18,
                     as_req_der,
                     pa_rep_raw: &pa_rep,
@@ -770,10 +772,11 @@ mod tests {
         // {{sec-kdf-oids}}: only id-alg-hkdf-with-sha512 is approved for the
         // KEM path; a client offering only an unapproved KDF must be
         // rejected with KDC_ERR_NO_ACCEPTABLE_KDF, not silently defaulted.
+        let nonce = next_nonce();
         let verified = VerifiedRequest {
             client_cert_der: vec![],
             client_dh_public,
-            nonce: 42,
+            nonce,
             supported_kdfs: vec![vec![9, 9, 9]],
             client_dh_nonce: None,
             is_anonymous: false,
@@ -787,7 +790,7 @@ mod tests {
             .build_as_rep(
                 &verified,
                 &BuildAsRepParams {
-                    nonce: 42,
+                    nonce,
                     enctype: 18,
                     as_req_der: b"mock-as-req",
                     client_name: "testuser@EXAMPLE.COM",
