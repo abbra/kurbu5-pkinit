@@ -296,6 +296,7 @@ pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, Pkinit
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::next_nonce;
     use synta::ObjectIdentifier;
 
     #[test]
@@ -322,7 +323,7 @@ mod tests {
                 algorithm: kdf_oid,
                 parameters: None,
             },
-            nonce: Some(Integer::from(99999i64)),
+            nonce: Some(Integer::from(next_nonce() as i64)),
             server_nonce: None,
         };
         let der = info.to_der().unwrap();
