@@ -328,6 +328,7 @@ name = "pkinit-core"
 version = "0.1.0"
 dependencies = [
  "native-ossl",
+ "pkinit-core",
  "synta",
  "synta-certificate",
  "synta-krb5",

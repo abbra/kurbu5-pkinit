@@ -8,6 +8,8 @@ pub mod identity;
 pub mod kem_types;
 pub mod san;
 pub mod server;
+#[cfg(feature = "test-util")]
+pub mod test_support;
 
 pub use config::{PkinitClientConfig, PkinitKdcConfig};
 pub use constants::DhGroup;
