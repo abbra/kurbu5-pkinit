@@ -14,5 +14,9 @@ native-ossl = "0.2"
 thiserror = "2"
 tracing = "0.1"
 
+[features]
+test-util = []
+
 [dev-dependencies]
 tempfile = "3"
+pkinit-core = { path = ".", features = ["test-util"] }
