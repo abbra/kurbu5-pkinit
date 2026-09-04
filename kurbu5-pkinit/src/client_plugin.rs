@@ -8,10 +8,12 @@ use pkinit_core::constants::{
 use pkinit_core::error::PkinitError;
 use pkinit_core::identity::{IdentitySource, PkinitIdentity, TrustStore};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::o2k::Krb5OctetString2Key;
 use crate::profile;
 use crate::trace::pkinit_trace;
+use crate::trust_broker_client::VarlinkTrustBroker;
 
 /// Responder question key asked when a configured PKCS#12 identity file
 /// needs a password that the initial empty-password attempt didn't satisfy.
@@ -117,6 +119,7 @@ impl ClpreauthModule for PkinitClient {
                 trust_store,
                 self.config.clone(),
                 server_principal,
+                true,
             ));
             return Ok(());
         }
@@ -134,6 +137,7 @@ impl ClpreauthModule for PkinitClient {
                     trust_store,
                     self.config.clone(),
                     server_principal,
+                    false,
                 ));
                 self.pending_pkcs12 = None;
             }
@@ -390,6 +394,7 @@ impl PkinitClient {
             pending.trust_store,
             self.config.clone(),
             pending.server_principal,
+            false,
         ));
         Ok(())
     }
@@ -403,10 +408,24 @@ fn build_client(
     trust_store: TrustStore,
     config: PkinitClientConfig,
     server_principal: Option<String>,
+    is_anonymous: bool,
 ) -> PkinitClientState {
+    let tofu = config.kdc_trust_tofu;
+    let broker = config.kdc_trust_broker.clone();
+    let timeout = Duration::from_secs(config.kdc_trust_timeout as u64);
+
     let mut client = PkinitClientState::new(identity, trust_store, config);
     if let Some(principal) = server_principal {
         client.set_kdc_identity(principal, None);
+    }
+    client.set_is_anonymous(is_anonymous);
+    if tofu {
+        let path = broker
+            .map(PathBuf::from)
+            .or_else(default_broker_socket_path);
+        if let Some(path) = path {
+            client.set_trust_broker(Box::new(VarlinkTrustBroker::new(path, timeout)), is_anonymous);
+        }
     }
     client
 }
