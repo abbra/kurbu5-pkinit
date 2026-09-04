@@ -38,6 +38,12 @@ pub enum PkinitError {
     #[error("certificate chain validation failed: {0}")]
     ChainValidationFailed(String),
 
+    #[error("KDC CA trust denied: {0}")]
+    KdcCaTrustDenied(String),
+
+    #[error("KDC CA not yet trusted; run the anonymous probe first")]
+    KdcCaTrustUnknown,
+
     #[error("clock skew too large: client={client_time}, allowed_skew={max_skew}s")]
     ClockSkew { client_time: i64, max_skew: i64 },
 

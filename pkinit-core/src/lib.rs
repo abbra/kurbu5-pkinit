@@ -10,7 +10,9 @@ pub mod san;
 pub mod server;
 #[cfg(feature = "test-util")]
 pub mod test_support;
+pub mod trust_broker;
 
 pub use config::{PkinitClientConfig, PkinitKdcConfig};
 pub use constants::DhGroup;
 pub use error::PkinitError;
+pub use trust_broker::{KdcCaTrustBroker, KdcTrustDecision, KdcTrustRequest};
