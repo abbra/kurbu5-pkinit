@@ -10,6 +10,7 @@ use crate::crypto::kdf::{self, DerivedKey, OctetString2Key, encode_principal_for
 use crate::crypto::kem::KemKeyPair;
 use crate::error::{PkinitError, asn1_err};
 use crate::identity::{PkinitIdentity, TrustStore};
+use crate::trust_broker::KdcCaTrustBroker;
 
 pub struct AsRepParams<'a> {
     pub nonce: i32,
@@ -45,6 +46,12 @@ pub struct PkinitClientState {
     /// `dh_key`/`kem_key`, whose presence changes independently (e.g.
     /// `process_kem_rep` consumes `kem_key` via `take()`).
     key_exchange: Option<KeyExchangeType>,
+    /// External trust broker consulted when local chain validation fails and
+    /// trust-on-first-use is enabled. `None` disables TOFU (default).
+    broker: Option<Box<dyn KdcCaTrustBroker>>,
+    /// Whether the current exchange is anonymous. Only an anonymous exchange
+    /// may establish new trust (broker `interactive = true`).
+    is_anonymous: bool,
 }
 
 impl PkinitClientState {
@@ -64,6 +71,8 @@ impl PkinitClientState {
             kdc_principal: None,
             kdc_hostname: None,
             key_exchange: None,
+            broker: None,
+            is_anonymous: false,
         }
     }
 
@@ -92,6 +101,42 @@ impl PkinitClientState {
     pub fn set_kdc_identity(&mut self, principal: String, hostname: Option<String>) {
         self.kdc_principal = Some(principal);
         self.kdc_hostname = hostname;
+    }
+
+    /// Install an external trust broker for trust-on-first-use of the KDC CA.
+    /// Consulted when local chain validation fails; `None` disables TOFU.
+    pub fn set_trust_broker(&mut self, broker: Box<dyn KdcCaTrustBroker>) {
+        self.broker = Some(broker);
+    }
+
+    /// Record whether the current exchange is anonymous. Only an anonymous
+    /// exchange may establish new trust (broker `interactive = true`).
+    pub fn set_is_anonymous(&mut self, is_anonymous: bool) {
+        self.is_anonymous = is_anonymous;
+    }
+
+    /// Validate the KDC's signer certificate and its chain, then check the KDC
+    /// EKU and (when the KDC principal is known) the KDC SAN. Shared by the DH
+    /// and KEM reply paths.
+    fn validate_kdc_chain(
+        &self,
+        signer_cert_der: &[u8],
+        all_certs_der: &[Vec<u8>],
+    ) -> Result<(), PkinitError> {
+        self.trust_store
+            .validate_chain(signer_cert_der, all_certs_der, false)?;
+
+        certauth::verify_kdc_eku(signer_cert_der)?;
+
+        if let Some(ref kdc_principal) = self.kdc_principal {
+            certauth::verify_kdc_san(
+                signer_cert_der,
+                kdc_principal,
+                self.kdc_hostname.as_deref(),
+            )?;
+        }
+
+        Ok(())
     }
 
     /// Override the DH/ECDH group used by `build_as_req()`, forcing the
@@ -309,21 +354,7 @@ impl PkinitClientState {
             });
         }
 
-        self.trust_store.validate_chain(
-            &verified.signer_cert_der,
-            &verified.all_certs_der,
-            false,
-        )?;
-
-        certauth::verify_kdc_eku(&verified.signer_cert_der)?;
-
-        if let Some(ref kdc_principal) = self.kdc_principal {
-            certauth::verify_kdc_san(
-                &verified.signer_cert_der,
-                kdc_principal,
-                self.kdc_hostname.as_deref(),
-            )?;
-        }
+        self.validate_kdc_chain(&verified.signer_cert_der, &verified.all_certs_der)?;
 
         let kdc_dh_key_info: synta_krb5::pkinit::KDCDHKeyInfo<'_> =
             synta_krb5::pkinit::KDCDHKeyInfo::from_der(&verified.content)
@@ -417,21 +448,7 @@ impl PkinitClientState {
             ));
         }
 
-        self.trust_store.validate_chain(
-            &verified.signer_cert_der,
-            &verified.all_certs_der,
-            false,
-        )?;
-
-        certauth::verify_kdc_eku(&verified.signer_cert_der)?;
-
-        if let Some(ref kdc_principal) = self.kdc_principal {
-            certauth::verify_kdc_san(
-                &verified.signer_cert_der,
-                kdc_principal,
-                self.kdc_hostname.as_deref(),
-            )?;
-        }
+        self.validate_kdc_chain(&verified.signer_cert_der, &verified.all_certs_der)?;
 
         let kdc_kem_info =
             KdcKemInfo::from_der(&verified.content).map_err(asn1_err("decode KDCKEMInfo"))?;
