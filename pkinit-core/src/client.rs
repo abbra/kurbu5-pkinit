@@ -736,22 +736,22 @@ mod tests {
     use super::*;
     use crate::test_support::build_kdc_chain;
     use crate::trust_broker::{KdcCaTrustBroker, KdcTrustDecision, KdcTrustRequest};
-    use std::cell::{Cell, RefCell};
-    use std::rc::Rc;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     struct MockBroker {
-        decision: RefCell<Option<KdcTrustDecision>>,
-        last_interactive: Rc<Cell<Option<bool>>>,
+        decision: KdcTrustDecision,
+        last_interactive: Arc<Mutex<Option<bool>>>,
     }
     impl MockBroker {
         fn new(decision: KdcTrustDecision) -> Self {
             Self {
-                decision: RefCell::new(Some(decision)),
-                last_interactive: Rc::new(Cell::new(None)),
+                decision,
+                last_interactive: Arc::new(Mutex::new(None)),
             }
         }
-        fn interactive_handle(&self) -> Rc<Cell<Option<bool>>> {
-            Rc::clone(&self.last_interactive)
+        fn interactive_handle(&self) -> Arc<Mutex<Option<bool>>> {
+            Arc::clone(&self.last_interactive)
         }
     }
     impl KdcCaTrustBroker for MockBroker {
@@ -759,12 +759,8 @@ mod tests {
             &self,
             req: &KdcTrustRequest<'_>,
         ) -> Result<KdcTrustDecision, PkinitError> {
-            self.last_interactive.set(Some(req.interactive));
-            Ok(self
-                .decision
-                .borrow_mut()
-                .take()
-                .expect("decision consumed once"))
+            *self.last_interactive.lock() = Some(req.interactive);
+            Ok(self.decision.clone())
         }
     }
 
@@ -858,7 +854,7 @@ mod tests {
         // Non-anonymous exchange must call the broker with interactive = false.
         let state = state_with_broker(broker, false);
         let _ = state.validate_kdc_chain(&chain.kdc_leaf_der, &[]);
-        assert_eq!(flag.get(), Some(false));
+        assert_eq!(*flag.lock(), Some(false));
     }
 
     #[test]
