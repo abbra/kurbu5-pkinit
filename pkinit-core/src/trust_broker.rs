@@ -34,7 +34,11 @@ pub enum KdcTrustDecision {
 /// Synchronous trait the client calls when local chain validation fails and
 /// trust-on-first-use is enabled. Implementations may block (the plugin's
 /// implementation does a blocking varlink round-trip).
-pub trait KdcCaTrustBroker {
+///
+/// `Send` is required because the broker is stored inside `PkinitClientState`,
+/// which the krb5 plugin holds in a `ClpreauthModule` (`Send + 'static`). The
+/// supertrait bound makes `Box<dyn KdcCaTrustBroker>` itself `Send`.
+pub trait KdcCaTrustBroker: Send {
     fn request_trust(
         &self,
         req: &KdcTrustRequest<'_>,
