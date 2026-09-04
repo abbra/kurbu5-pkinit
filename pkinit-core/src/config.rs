@@ -15,6 +15,9 @@ pub struct PkinitClientConfig {
     pub anchors: Vec<String>,
     pub intermediates: Vec<String>,
     pub crls: Vec<String>,
+    pub kdc_trust_tofu: bool,
+    pub kdc_trust_broker: Option<String>,
+    pub kdc_trust_timeout: u32,
 }
 
 impl Default for PkinitClientConfig {
@@ -33,6 +36,9 @@ impl Default for PkinitClientConfig {
             anchors: Vec::new(),
             intermediates: Vec::new(),
             crls: Vec::new(),
+            kdc_trust_tofu: false,
+            kdc_trust_broker: None,
+            kdc_trust_timeout: 30,
         }
     }
 }
@@ -91,6 +97,14 @@ mod tests {
         assert_eq!(c.dh_min_bits, 2048);
         assert_eq!(c.dh_group, DhGroup::Oakley2048);
         assert!(c.identity.is_none());
+    }
+
+    #[test]
+    fn client_config_tofu_defaults() {
+        let c = PkinitClientConfig::default();
+        assert!(!c.kdc_trust_tofu);
+        assert!(c.kdc_trust_broker.is_none());
+        assert_eq!(c.kdc_trust_timeout, 30);
     }
 
     #[test]
