@@ -4,6 +4,7 @@ mod o2k;
 mod principal;
 mod profile;
 mod trace;
+mod trust_broker_client;
 
 use client_plugin::PkinitClient;
 use kdc_plugin::{PkinitCertauth, PkinitKdc};
