@@ -173,11 +173,7 @@ impl PkinitClientState {
         // 4. EKU/SAN checks always run, regardless of which anchor set validated.
         certauth::verify_kdc_eku(signer_cert_der)?;
         if let Some(ref kdc_principal) = self.kdc_principal {
-            certauth::verify_kdc_san(
-                signer_cert_der,
-                kdc_principal,
-                self.kdc_hostname.as_deref(),
-            )?;
+            certauth::verify_kdc_san(signer_cert_der, kdc_principal, self.kdc_hostname.as_deref())?;
         }
         Ok(())
     }

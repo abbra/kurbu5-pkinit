@@ -71,8 +71,16 @@ fn sign_cert(
         .serial_number(Integer::from_i64(serial))
         .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
         .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
-        .add_extension_oid(synta_certificate::oids::SUBJECT_KEY_IDENTIFIER, false, &ski_der)
-        .add_extension_oid(synta_certificate::oids::AUTHORITY_KEY_IDENTIFIER, false, &aki_der);
+        .add_extension_oid(
+            synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,
+            false,
+            &ski_der,
+        )
+        .add_extension_oid(
+            synta_certificate::oids::AUTHORITY_KEY_IDENTIFIER,
+            false,
+            &aki_der,
+        );
 
     if ca {
         let bc_der = synta_certificate::encode_basic_constraints(true, None).unwrap();
@@ -91,8 +99,20 @@ fn sign_cert(
 pub fn build_kdc_chain(realm: &str) -> TestKdcChain {
     let ca_key = generate_ec_key();
     let ca_spki = ca_key.public_key_to_der().unwrap();
-    let ca_name = NameBuilder::new().common_name("Test KDC CA").build().unwrap();
-    let ca_der = sign_cert(&ca_key, &ca_name, &ca_name, &ca_spki, &ca_spki, 1, true, &[]);
+    let ca_name = NameBuilder::new()
+        .common_name("Test KDC CA")
+        .build()
+        .unwrap();
+    let ca_der = sign_cert(
+        &ca_key,
+        &ca_name,
+        &ca_name,
+        &ca_spki,
+        &ca_spki,
+        1,
+        true,
+        &[],
+    );
 
     let kdc_key = generate_ec_key();
     let kdc_spki = kdc_key.public_key_to_der().unwrap();
@@ -123,5 +143,8 @@ pub fn build_kdc_chain(realm: &str) -> TestKdcChain {
         ],
     );
 
-    TestKdcChain { ca_der, kdc_leaf_der }
+    TestKdcChain {
+        ca_der,
+        kdc_leaf_der,
+    }
 }

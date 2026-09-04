@@ -5,9 +5,8 @@ use base64::Engine;
 use pkinit_core::test_support::build_kdc_chain;
 use pkinit_trust_brokerd::Broker;
 use pkinit_trust_brokerd::store::{PinStore, Prompter};
-use pkinit_trust_brokerd::Broker;
 use pkinit_trust_proto::{Decision, KdcTrustProxy};
-use zlink_smol::{unix, Server};
+use zlink_smol::{Server, unix};
 
 struct AlwaysYes;
 impl Prompter for AlwaysYes {

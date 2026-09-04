@@ -422,10 +422,8 @@ fn build_client(
     if tofu {
         let path = broker
             .map(PathBuf::from)
-            .or_else(default_broker_socket_path);
-        if let Some(path) = path {
-            client.set_trust_broker(Box::new(VarlinkTrustBroker::new(path, timeout)), is_anonymous);
-        }
+            .unwrap_or_else(pkinit_trust_proto::default_socket_path);
+        client.set_trust_broker(Box::new(VarlinkTrustBroker::new(path, timeout)));
     }
     client
 }

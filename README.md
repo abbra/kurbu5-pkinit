@@ -115,6 +115,27 @@ under `[libdefaults]` / `[realms]` (client) and `[kdcdefaults]` / `[realms]`
 | `pkinit_pqc_min_algorithm` | both | Minimum ML-KEM strength to offer/accept |
 | `pkinit_allow_upn` | KDC | Accept Microsoft UPN SANs for client authorization |
 | `pkinit_indicator` | KDC | Authentication indicators to attach on successful PKINIT |
+| `pkinit_kdc_trust_tofu` | client | Enable trust-on-first-use of the KDC CA (default `false`) |
+| `pkinit_kdc_trust_broker` | client | Trust-broker socket path (default `$XDG_RUNTIME_DIR/pkinit-kdc-trust.sock`) |
+| `pkinit_kdc_trust_timeout` | client | Seconds to wait for a broker reply (default `30`) |
+
+### KDC CA trust-on-first-use (TOFU)
+
+When `pkinit_kdc_trust_tofu = true` and the KDC's certificate does not chain to
+any configured `pkinit_anchors`, the client asks an external trust broker over a
+[varlink](https://varlink.org/) Unix socket whether to trust the CA the KDC
+presented. New trust is only ever established during the **anonymous** exchange
+(so the client identity is never sent to a not-yet-trusted KDC); this requires
+`auto_fast_armor = true` (or a prior `kinit -n`) so the anonymous exchange runs
+first. The daemon owns policy and remembers decisions; the authenticated
+exchange only validates against an already-approved CA and fails if none exists.
+The broker's approval selects which anchors to trust — the certificate chain,
+KDC EKU, and KDC SAN are still verified cryptographically. Everything fails
+closed: no broker, a timeout, or a denial aborts the exchange.
+
+A reference broker daemon (`pkinit-trust-brokerd`) that prompts on the terminal
+and remembers per-realm pins ships in this workspace; the varlink interface it
+speaks is defined in `pkinit-trust-proto`.
 
 ## Testing
 

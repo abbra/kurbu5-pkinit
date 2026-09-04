@@ -28,7 +28,7 @@ impl Broker {
 
 fn decode_all(items: &[String]) -> Option<Vec<Vec<u8>>> {
     let eng = base64::engine::general_purpose::STANDARD;
-    items.iter().map(|s| eng.decode(s).map_err(|_| ())).collect()
+    items.iter().map(|s| eng.decode(s).ok()).collect()
 }
 
 #[service(interface = "org.kurbu5.pkinit.KdcTrust")]
