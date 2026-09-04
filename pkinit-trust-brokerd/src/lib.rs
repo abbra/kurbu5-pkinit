@@ -54,13 +54,18 @@ impl Broker {
         })?;
 
         let subject = format!("(CA for {realm})");
-        Ok(self.store.decide(
+        let reply = self.store.decide(
             realm,
             &subject,
             &signer,
             &presented,
             interactive,
             self.prompter.as_ref(),
-        ))
+        );
+        eprintln!(
+            "[broker] realm={realm} interactive={interactive} decision={:?}",
+            reply.decision
+        );
+        Ok(reply)
     }
 }

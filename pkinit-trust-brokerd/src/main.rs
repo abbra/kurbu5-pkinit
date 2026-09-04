@@ -14,10 +14,10 @@
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
-use pkinit_trust_brokerd::store::{AutoPrompter, PinStore, Prompter};
 use pkinit_trust_brokerd::Broker;
-use pkinit_trust_proto::DEFAULT_SOCKET_NAME;
-use zlink_smol::{unix, Server};
+use pkinit_trust_brokerd::store::{AutoPrompter, PinStore, Prompter};
+use pkinit_trust_proto::default_socket_path;
+use zlink_smol::{Server, unix};
 
 /// Terminal y/N prompter.
 struct TtyPrompter;

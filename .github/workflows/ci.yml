@@ -207,3 +207,32 @@ jobs:
           restore-keys: cargo-registry-v1-
       - name: Run PKINIT system integration tests
         run: ./contrib/ci/local-ci.sh --no-deps system-test
+
+  # ── TOFU test ──────────────────────────────────────────────────────────────
+  # Exercises the KDC-CA trust-on-first-use flow (anonymous probe → broker
+  # approval/denial → pin) across happy-path, fail-closed, and MITM scenarios,
+  # then uploads an HTML report visualizing each scenario.
+  tofu-test:
+    name: TOFU Test
+    needs: [build]
+    runs-on: ubuntu-latest
+    container: quay.io/fedora/fedora:latest
+    steps:
+      - name: Install native dependencies
+        run: dnf install -y $DNF_PACKAGES $SYSTEM_TEST_PACKAGES
+      - uses: actions/checkout@v4
+      - name: Restore cargo registry cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/registry
+          key: cargo-registry-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-registry-v1-
+      - name: Run PKINIT KDC-CA trust-on-first-use test
+        run: ./contrib/ci/local-ci.sh --no-deps tofu-test
+      - name: Upload TOFU HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkinit-tofu-report
+          path: pkinit-tofu-report.html
+          if-no-files-found: warn
