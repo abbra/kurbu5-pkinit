@@ -1,0 +1,21 @@
+[package]
+name = "pkinit-trust-brokerd"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Reference PKINIT KDC-CA trust broker daemon (varlink)"
+
+[dependencies]
+pkinit-trust-proto = { path = "../pkinit-trust-proto" }
+zlink-smol = "0.4"
+smol = "2"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+synta-certificate = { version = "0.3", features = ["std", "openssl"] }
+synta = "0.3"
+synta-x509-verification = "0.3"
+
+[dev-dependencies]
+pkinit-core = { path = "../pkinit-core", features = ["test-util"] }
+tempfile = "3"
