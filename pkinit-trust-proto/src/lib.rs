@@ -7,7 +7,7 @@
 extern crate zlink_smol as zlink;
 
 use serde::{Deserialize, Serialize};
-use zlink::{introspect, proxy, ReplyError};
+use zlink::{ReplyError, introspect, proxy};
 
 /// Reverse-DNS varlink interface name.
 pub const INTERFACE: &str = "org.kurbu5.pkinit.KdcTrust";

@@ -39,10 +39,7 @@ pub enum KdcTrustDecision {
 /// which the krb5 plugin holds in a `ClpreauthModule` (`Send + 'static`). The
 /// supertrait bound makes `Box<dyn KdcCaTrustBroker>` itself `Send`.
 pub trait KdcCaTrustBroker: Send {
-    fn request_trust(
-        &self,
-        req: &KdcTrustRequest<'_>,
-    ) -> Result<KdcTrustDecision, PkinitError>;
+    fn request_trust(&self, req: &KdcTrustRequest<'_>) -> Result<KdcTrustDecision, PkinitError>;
 }
 
 #[cfg(test)]
