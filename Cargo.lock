@@ -657,6 +657,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pkinit-trust-brokerd"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "pkinit-core",
+ "pkinit-trust-proto",
+ "serde",
+ "serde_json",
+ "smol",
+ "synta",
+ "synta-certificate",
+ "synta-x509-verification",
+ "tempfile",
+ "zlink-smol",
+]
+
+[[package]]
 name = "pkinit-trust-proto"
 version = "0.1.0"
 dependencies = [
