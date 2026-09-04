@@ -10,7 +10,7 @@ use crate::crypto::kdf::{self, DerivedKey, OctetString2Key, encode_principal_for
 use crate::crypto::kem::KemKeyPair;
 use crate::error::{PkinitError, asn1_err};
 use crate::identity::{PkinitIdentity, TrustStore};
-use crate::trust_broker::KdcCaTrustBroker;
+use crate::trust_broker::{KdcCaTrustBroker, KdcTrustDecision, KdcTrustRequest};
 
 pub struct AsRepParams<'a> {
     pub nonce: i32,
@@ -123,11 +123,55 @@ impl PkinitClientState {
         signer_cert_der: &[u8],
         all_certs_der: &[Vec<u8>],
     ) -> Result<(), PkinitError> {
-        self.trust_store
-            .validate_chain(signer_cert_der, all_certs_der, false)?;
+        // 1. Try configured anchors first.
+        match self
+            .trust_store
+            .validate_chain(signer_cert_der, all_certs_der, false)
+        {
+            Ok(()) => {}
+            Err(configured_err) => {
+                // 2. Fall back to the trust broker, if one is installed and we
+                //    know the KDC identity (required to derive the realm and to
+                //    check the SAN).
+                let Some(broker) = self.broker.as_deref() else {
+                    return Err(configured_err);
+                };
+                let Some(kdc_principal) = self.kdc_principal.as_deref() else {
+                    return Err(configured_err);
+                };
+                let Some(realm) = kdc_principal.split('@').nth(1) else {
+                    return Err(configured_err);
+                };
 
+                let req = KdcTrustRequest {
+                    realm,
+                    kdc_principal,
+                    signer_cert_der,
+                    presented_certs_der: all_certs_der,
+                    interactive: self.is_anonymous,
+                };
+
+                match broker.request_trust(&req)? {
+                    KdcTrustDecision::Trusted { anchors } => {
+                        // 3. Re-validate against the approved anchors. Never
+                        //    blind-trust: each anchor must verify as a proper
+                        //    CA (signature-checked against the presented chain,
+                        //    BasicConstraints cA=TRUE, keyCertSign), then the
+                        //    chain must validate to it.
+                        validate_broker_anchors(anchors, signer_cert_der, all_certs_der)?;
+                    }
+                    KdcTrustDecision::Denied(reason) => {
+                        return Err(PkinitError::KdcCaTrustDenied(reason));
+                    }
+                    KdcTrustDecision::Unknown => {
+                        return Err(PkinitError::KdcCaTrustUnknown);
+                    }
+                }
+            }
+        }
+
+        // 4. EKU/SAN checks always run, regardless of which anchor set validated.
         certauth::verify_kdc_eku(signer_cert_der)?;
-
         if let Some(ref kdc_principal) = self.kdc_principal {
             certauth::verify_kdc_san(
                 signer_cert_der,
@@ -135,7 +179,6 @@ impl PkinitClientState {
                 self.kdc_hostname.as_deref(),
             )?;
         }
-
         Ok(())
     }
 
@@ -544,6 +587,84 @@ impl PkinitClientState {
     }
 }
 
+/// Verify broker-approved trust anchors before trusting them: every anchor
+/// must be a CA certificate (`cA=TRUE`, keyCertSign) signature-checked
+/// against the presented chain, and the chain must validate to it. A KDC leaf
+/// can never serve as a trust root, so a broker anchor that fails these checks
+/// is refused rather than trusted.
+fn validate_broker_anchors(
+    anchors: Vec<Vec<u8>>,
+    signer_cert_der: &[u8],
+    all_certs_der: &[Vec<u8>],
+) -> Result<(), PkinitError> {
+    use synta_x509_verification::{
+        ExtensionPolicy, PolicyDefinition, Store, ValidationProfile, VerificationCertificate,
+    };
+
+    let mut tofu_store = TrustStore::new();
+    for a in anchors {
+        tofu_store.add_anchor(a);
+    }
+    for i in all_certs_der {
+        tofu_store.add_intermediate(i.clone());
+    }
+
+    let anchors_vc: Vec<VerificationCertificate<'_>> = tofu_store
+        .anchors()
+        .iter()
+        .map(|a| anchor_vc(a, "anchor"))
+        .collect::<Result<_, _>>()?;
+    let trust_store = Store::new(anchors_vc);
+    let mut intermediates_vc = Vec::with_capacity(all_certs_der.len());
+    for der in all_certs_der {
+        intermediates_vc.push(anchor_vc(der, "presented certificate")?);
+    }
+    let leaf = anchor_vc(signer_cert_der, "KDC signer certificate")?;
+
+    let verifier = synta_certificate::default_signature_verifier();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let mut policy = PolicyDefinition::new_client(verifier, now);
+    policy.profile = ValidationProfile::Rfc5280;
+    policy.extended_key_usage = None;
+    policy.permitted_spki_algorithms =
+        synta_x509_verification::WEBPKI_PERMITTED_SPKI_ALGORITHMS_WITH_PQ;
+    policy.permitted_signature_algorithms =
+        synta_x509_verification::WEBPKI_PERMITTED_SIGNATURE_ALGORITHMS_WITH_PQ;
+    // CA certificates in the chain get the default WebPKI CA policy:
+    // BasicConstraints must be present and critical with cA=TRUE, and
+    // KeyUsage must include keyCertSign. This is what refuses a leaf used as
+    // a trust anchor.
+    policy.ca_extension_policy = ExtensionPolicy::new_default_webpki_ca();
+    policy.ee_extension_policy = ExtensionPolicy::new_permit_all();
+
+    synta_x509_verification::verify(
+        &leaf,
+        &intermediates_vc,
+        &policy,
+        &trust_store,
+        Default::default(),
+    )
+    .map_err(|e| {
+        PkinitError::KdcCaTrustDenied(format!("broker-approved anchor failed validation: {e}"))
+    })?;
+    Ok(())
+}
+
+fn anchor_vc<'a>(
+    der: &'a [u8],
+    what: &str,
+) -> Result<synta_x509_verification::VerificationCertificate<'a>, PkinitError> {
+    let cert = synta::Decoder::new(der, synta::Encoding::Der)
+        .decode()
+        .map_err(|e| PkinitError::KdcCaTrustDenied(format!("bad {what} DER: {e}")))?;
+    Ok(synta_x509_verification::VerificationCertificate::new(
+        cert, der,
+    ))
+}
+
 fn parse_td_kem_algorithm(data: &[u8]) -> Option<KemAlgorithm> {
     let td: synta_krb5::pkinit::TdDhParameters<'_> =
         synta_krb5::pkinit::TdDhParameters::from_der(data).ok()?;
@@ -613,6 +734,132 @@ pub fn is_pq_signing_certificate(cert_der: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::build_kdc_chain;
+    use crate::trust_broker::{KdcCaTrustBroker, KdcTrustDecision, KdcTrustRequest};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    struct MockBroker {
+        decision: RefCell<Option<KdcTrustDecision>>,
+        last_interactive: Rc<Cell<Option<bool>>>,
+    }
+    impl MockBroker {
+        fn new(decision: KdcTrustDecision) -> Self {
+            Self {
+                decision: RefCell::new(Some(decision)),
+                last_interactive: Rc::new(Cell::new(None)),
+            }
+        }
+        fn interactive_handle(&self) -> Rc<Cell<Option<bool>>> {
+            Rc::clone(&self.last_interactive)
+        }
+    }
+    impl KdcCaTrustBroker for MockBroker {
+        fn request_trust(
+            &self,
+            req: &KdcTrustRequest<'_>,
+        ) -> Result<KdcTrustDecision, PkinitError> {
+            self.last_interactive.set(Some(req.interactive));
+            Ok(self
+                .decision
+                .borrow_mut()
+                .take()
+                .expect("decision consumed once"))
+        }
+    }
+
+    fn state_with_broker(broker: MockBroker, is_anonymous: bool) -> PkinitClientState {
+        let mut state = PkinitClientState::new(
+            PkinitIdentity {
+                cert_der: vec![],
+                key_pkcs8_der: vec![],
+                chain: vec![],
+            },
+            TrustStore::new(), // empty: configured validation fails, forcing the broker path
+            PkinitClientConfig::default(),
+        );
+        state.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".into(), None);
+        state.set_trust_broker(Box::new(broker));
+        state.set_is_anonymous(is_anonymous);
+        state
+    }
+
+    #[test]
+    fn tofu_trusted_validates_against_returned_anchor() {
+        let chain = build_kdc_chain("EXAMPLE.COM");
+        let broker = MockBroker::new(KdcTrustDecision::Trusted {
+            anchors: vec![chain.ca_der.clone()],
+        });
+        let state = state_with_broker(broker, true);
+        state
+            .validate_kdc_chain(&chain.kdc_leaf_der, &[])
+            .expect("approved anchor should validate the KDC leaf");
+    }
+
+    #[test]
+    fn tofu_denied_returns_error() {
+        let chain = build_kdc_chain("EXAMPLE.COM");
+        let broker = MockBroker::new(KdcTrustDecision::Denied("user declined".into()));
+        let state = state_with_broker(broker, true);
+        let err = state
+            .validate_kdc_chain(&chain.kdc_leaf_der, &[])
+            .unwrap_err();
+        assert!(matches!(err, PkinitError::KdcCaTrustDenied(_)));
+    }
+
+    #[test]
+    fn tofu_unknown_returns_error() {
+        let chain = build_kdc_chain("EXAMPLE.COM");
+        let broker = MockBroker::new(KdcTrustDecision::Unknown);
+        let state = state_with_broker(broker, false);
+        let err = state
+            .validate_kdc_chain(&chain.kdc_leaf_der, &[])
+            .unwrap_err();
+        assert!(matches!(err, PkinitError::KdcCaTrustUnknown));
+    }
+
+    #[test]
+    fn tofu_never_blind_trusts_wrong_anchor() {
+        // Broker approves, but returns an anchor that did NOT sign the leaf.
+        let real = build_kdc_chain("EXAMPLE.COM");
+        let other = build_kdc_chain("OTHER.COM");
+        let broker = MockBroker::new(KdcTrustDecision::Trusted {
+            anchors: vec![other.ca_der],
+        });
+        let state = state_with_broker(broker, true);
+        let err = state
+            .validate_kdc_chain(&real.kdc_leaf_der, &[])
+            .unwrap_err();
+        assert!(matches!(err, PkinitError::KdcCaTrustDenied(_)));
+    }
+
+    #[test]
+    fn tofu_rejects_non_ca_anchor() {
+        // A broker returning the KDC leaf as a trust anchor must be refused:
+        // trust anchors have to be CA certificates.
+        let chain = build_kdc_chain("EXAMPLE.COM");
+        let broker = MockBroker::new(KdcTrustDecision::Trusted {
+            anchors: vec![chain.kdc_leaf_der.clone()],
+        });
+        let state = state_with_broker(broker, true);
+        let err = state
+            .validate_kdc_chain(&chain.kdc_leaf_der, &[])
+            .unwrap_err();
+        assert!(matches!(err, PkinitError::KdcCaTrustDenied(_)));
+    }
+
+    #[test]
+    fn tofu_passes_interactive_flag_from_is_anonymous() {
+        let chain = build_kdc_chain("EXAMPLE.COM");
+        let broker = MockBroker::new(KdcTrustDecision::Trusted {
+            anchors: vec![chain.ca_der.clone()],
+        });
+        let flag = broker.interactive_handle();
+        // Non-anonymous exchange must call the broker with interactive = false.
+        let state = state_with_broker(broker, false);
+        let _ = state.validate_kdc_chain(&chain.kdc_leaf_der, &[]);
+        assert_eq!(flag.get(), Some(false));
+    }
 
     #[test]
     fn client_state_construction() {
