@@ -44,12 +44,18 @@ SUPPORTED_KEY_TYPES = {
 class PkinitRealm:
     def __init__(self, testdir=None, realm=REALM, portbase=PORTBASE,
                  kdc_plugin_so=None, client_plugin_so=None, principal="user",
-                 key_type="ec:P-256", pqc_min_algorithm=None):
+                 key_type="ec:P-256", pqc_min_algorithm=None,
+                 tofu_broker=None):
         self.realm = realm
         self.portbase = portbase
         self.principal = principal
         self.key_type = key_type
         self.pqc_min_algorithm = pqc_min_algorithm
+        # When set, the client krb5.conf enables trust-on-first-use of the KDC
+        # CA via the broker at this socket path, omits the client's KDC-CA
+        # anchor (so local validation fails and the broker path engages), and
+        # turns on auto_fast_armor so the anonymous exchange establishes trust.
+        self.tofu_broker = tofu_broker
         if key_type not in SUPPORTED_KEY_TYPES:
             raise ValueError(
                 f"Unsupported key type: {key_type}. "
@@ -298,6 +304,35 @@ class PkinitRealm:
         if self.pqc_min_algorithm:
             pqc_line = f"\n                    pkinit_pqc_min_algorithm = {self.pqc_min_algorithm}"
 
+        # Client-side KDC trust: normally a static anchor; under TOFU the client
+        # has no KDC-CA anchor and consults the broker instead, and needs
+        # auto_fast_armor so the anonymous exchange runs first to establish it.
+        if self.tofu_broker:
+            # auto_fast_armor is a per-realm option: it makes the client obtain
+            # an anonymous PKINIT FAST-armor ticket first, which is the exchange
+            # that establishes trust before the authenticated one.
+            client_pkinit = (
+                "auto_fast_armor = true\n"
+                "                    pkinit_kdc_trust_tofu = true\n"
+                f"                    pkinit_kdc_trust_broker = {self.tofu_broker}"
+            )
+        else:
+            client_pkinit = f"pkinit_anchors = FILE:{self.ca_cert}"
+        client_pkinit += pqc_line
+
+        # KDC identity. Under TOFU the KDC must *present* its issuing CA in the
+        # reply's SignedData so the client can pin the CA (not just the leaf);
+        # the identity loader treats the first cert as the leaf and the rest as
+        # the chain, so a concatenated leaf+CA file makes the KDC send both.
+        kdc_identity = f"FILE:{self.kdc_cert},{self.kdc_key}"
+        if self.tofu_broker:
+            kdc_chain = os.path.join(self.certs_dir, "kdc-chain.pem")
+            with open(kdc_chain, "w") as out:
+                for src in (self.kdc_cert, self.ca_cert):
+                    with open(src) as inp:
+                        out.write(inp.read())
+            kdc_identity = f"FILE:{kdc_chain},{self.kdc_key}"
+
         krb5 = textwrap.dedent(f"""\
             [libdefaults]
                 default_realm = {self.realm}
@@ -309,7 +344,7 @@ class PkinitRealm:
                 {self.realm} = {{
                     kdc = 127.0.0.1:{self.portbase}
                     admin_server = 127.0.0.1:{self.portbase + 1}
-                    pkinit_anchors = FILE:{self.ca_cert}{pqc_line}
+                    {client_pkinit}
                 }}
 
             [domain_realm]
@@ -350,7 +385,7 @@ class PkinitRealm:
                     max_life = 1h
                     max_renewable_life = 24h
                     supported_enctypes = aes256-cts:normal aes128-cts:normal
-                    pkinit_identity = FILE:{self.kdc_cert},{self.kdc_key}
+                    pkinit_identity = {kdc_identity}
                     pkinit_anchors = FILE:{self.ca_cert}
                     default_principal_flags = +preauth
                     pkinit_eku_checking = none{pqc_line}
@@ -474,6 +509,10 @@ def main():
                         help="Certificate key type (default: ec:P-256)")
     parser.add_argument("--pqc-min-algorithm", default=None,
                         help="Minimum PQ algorithm (e.g. ML-KEM-768)")
+    parser.add_argument("--tofu-broker", default=None, metavar="SOCKET",
+                        help="Enable KDC-CA trust-on-first-use: client consults "
+                             "the broker at this Unix socket, has no static "
+                             "KDC-CA anchor, and uses auto_fast_armor")
     args = parser.parse_args()
 
     kdc_so = args.kdc_plugin_so or args.plugin_so
@@ -490,6 +529,7 @@ def main():
         principal=args.principal,
         key_type=args.key_type,
         pqc_min_algorithm=args.pqc_min_algorithm,
+        tofu_broker=args.tofu_broker,
     )
     realm.start()
 

@@ -2,3 +2,6 @@
 .claude/
 docs/superpowers/
 __pycache__
+
+# TOFU system-test HTML report artifact
+pkinit-tofu-report.html
