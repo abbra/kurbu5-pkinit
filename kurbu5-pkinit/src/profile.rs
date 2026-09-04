@@ -40,6 +40,15 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>, config: &mut P
     if let Ok(v) = profile.get_string("libdefaults", "pkinit_pqc_min_algorithm", None, None) {
         config.kem_algorithm = KemAlgorithm::from_name(&v);
     }
+    if let Ok(v) = profile.get_boolean("libdefaults", "pkinit_kdc_trust_tofu", None, false) {
+        config.kdc_trust_tofu = v;
+    }
+    if let Ok(v) = profile.get_string("libdefaults", "pkinit_kdc_trust_broker", None, None) {
+        config.kdc_trust_broker = Some(v);
+    }
+    if let Ok(v) = profile.get_integer("libdefaults", "pkinit_kdc_trust_timeout", None, 30) {
+        config.kdc_trust_timeout = v.clamp(0, i32::MAX) as u32;
+    }
 
     if let Some(realm) = realm {
         if config.identity.is_none()
@@ -75,6 +84,15 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>, config: &mut P
         }
         if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_pqc_min_algorithm"), None) {
             config.kem_algorithm = KemAlgorithm::from_name(&v);
+        }
+        if let Ok(v) = profile.get_boolean("realms", realm, Some("pkinit_kdc_trust_tofu"), false) {
+            config.kdc_trust_tofu = v;
+        }
+        if let Ok(v) = profile.get_string("realms", realm, Some("pkinit_kdc_trust_broker"), None) {
+            config.kdc_trust_broker = Some(v);
+        }
+        if let Ok(v) = profile.get_integer("realms", realm, Some("pkinit_kdc_trust_timeout"), 30) {
+            config.kdc_trust_timeout = v.clamp(0, i32::MAX) as u32;
         }
     }
 
