@@ -173,3 +173,29 @@ pub fn build_kdc_chain(realm: &str) -> TestKdcChain {
 pub fn build_pq_kdc_chain(realm: &str) -> TestKdcChain {
     build_chain_with_ca_key(realm, generate_ml_dsa_key(c"ML-DSA-65"), "Test PQ KDC CA")
 }
+
+/// A self-signed leaf certificate and matching PKCS#8 private key, for tests
+/// that need to sign something (a client `AuthPack`, a KDC `kemSignedData`)
+/// with a chosen algorithm — as opposed to [`build_kdc_chain`]/
+/// [`build_pq_kdc_chain`], which build a CA/leaf pair for chain-validation
+/// tests and don't expose the private keys.
+fn build_signing_identity(key: Pkey<Private>, common_name: &str) -> (Vec<u8>, Vec<u8>) {
+    let spki = key.public_key_to_der().unwrap();
+    let name = NameBuilder::new().common_name(common_name).build().unwrap();
+    let cert_der = sign_cert(&key, &name, &name, &spki, &spki, 1, false, &[]);
+    let key_pkcs8_der = key.to_pkcs8_der().expect("PKCS#8 DER");
+    (cert_der, key_pkcs8_der)
+}
+
+/// A self-signed (cert_der, key_pkcs8_der) pair signed with ML-DSA-65 (FIPS
+/// 204), for downgrade-prevention tests that need `is_pq_signing_certificate`
+/// to recognize the signer as post-quantum.
+pub fn build_pq_signing_identity() -> (Vec<u8>, Vec<u8>) {
+    build_signing_identity(generate_ml_dsa_key(c"ML-DSA-65"), "Test PQ Signer")
+}
+
+/// A self-signed (cert_der, key_pkcs8_der) pair signed with ECDSA P-256, for
+/// downgrade-prevention tests that need a traditional (non-PQ) signer.
+pub fn build_classical_signing_identity() -> (Vec<u8>, Vec<u8>) {
+    build_signing_identity(generate_ec_key(), "Test Classical Signer")
+}

@@ -558,9 +558,19 @@ impl PkinitClientState {
                 }
 
                 if let Some(group) = parse_td_dh_parameters(data, self.config.dh_min_bits) {
-                    if self.has_pq_certificate() {
+                    // draft-bokovoy-kitten-pkinit-pqc's downgrade-prevention
+                    // rule applies only to a client that both signed with a
+                    // PQ certificate *and* sent a PQ KEM key on the attempt
+                    // being retried — `has_pq_certificate()` alone isn't
+                    // enough, since a PQ-cert client MAY legitimately have
+                    // started on classical DH (cert algorithm and key
+                    // exchange are independently configured). Gate on the
+                    // key-exchange path actually used for that attempt.
+                    if self.has_pq_certificate()
+                        && matches!(self.key_exchange, Some(KeyExchangeType::Kem(_)))
+                    {
                         return Err(PkinitError::DowngradeRejected(
-                            "PQ client must not fall back to classical DH".into(),
+                            "client sent a post-quantum KEM key; refusing to fall back to classical DH/ECDH".into(),
                         ));
                     }
                     self.set_dh_group(group);
@@ -966,5 +976,184 @@ mod tests {
         let empty_der = empty.to_der().expect("encode empty padata list");
         let result = state.handle_tryagain(&empty_der).unwrap();
         assert!(matches!(result, RetryAction::NoRetry));
+    }
+
+    // --- draft-bokovoy-kitten-pkinit-pqc downgrade prevention ---
+
+    /// `TD-DH-PARAMETERS` content advertising only classical DH groups (no
+    /// KEM algorithms) — built from a KDC config with no configured KEM
+    /// algorithms, whose `dh_min_bits` default (2048) also excludes the EC
+    /// groups, leaving just Oakley2048/4096.
+    fn classical_dh_only_td_params() -> Vec<u8> {
+        use crate::config::PkinitKdcConfig;
+        use crate::server::PkinitKdcState;
+
+        let kdc = PkinitKdcState::new(
+            PkinitIdentity {
+                cert_der: vec![],
+                key_pkcs8_der: vec![],
+                chain: vec![],
+            },
+            TrustStore::new(),
+            PkinitKdcConfig::default(),
+        )
+        .expect("build KDC state");
+        kdc.build_td_ephemeral_key_params()
+    }
+
+    fn wrap_as_td_dh_parameters_padata(td_der: Vec<u8>) -> Vec<u8> {
+        let padata = vec![synta_krb5::kerberos_v5::PaData {
+            padata_type: synta_krb5::kerberos_v5::Int32::new_unchecked(
+                synta_krb5::constants::TD_DH_PARAMETERS,
+            ),
+            padata_value: synta::OctetString::new(td_der),
+        }];
+        padata.to_der().expect("encode padata list")
+    }
+
+    #[test]
+    fn downgrade_rejects_dh_retry_for_client_that_used_kem() {
+        // The client signed with a PQ cert and sent a PQ KEM key on the
+        // attempt being retried (key_exchange == Kem) — the KDC's offer to
+        // fall back to classical DH must be refused outright.
+        let (pq_cert_der, _) = crate::test_support::build_pq_signing_identity();
+        let mut state = PkinitClientState::new(
+            PkinitIdentity {
+                cert_der: pq_cert_der,
+                key_pkcs8_der: vec![],
+                chain: vec![],
+            },
+            TrustStore::new(),
+            PkinitClientConfig::default(),
+        );
+        assert!(state.has_pq_certificate());
+        state.key_exchange = Some(KeyExchangeType::Kem(KemAlgorithm::MlKem768));
+
+        let padata_der = wrap_as_td_dh_parameters_padata(classical_dh_only_td_params());
+        let err = state.handle_tryagain(&padata_der).unwrap_err();
+        assert!(matches!(err, PkinitError::DowngradeRejected(_)));
+    }
+
+    #[test]
+    fn downgrade_check_does_not_block_a_pq_cert_client_that_never_used_kem() {
+        // Regression test: `has_pq_certificate()` alone must not trigger the
+        // downgrade check. A PQ-cert client that was already on the
+        // classical DH path (cert algorithm and key-exchange algorithm are
+        // configured independently) hasn't downgraded from anything when the
+        // KDC offers different DH parameters to retry with.
+        let (pq_cert_der, _) = crate::test_support::build_pq_signing_identity();
+        let mut state = PkinitClientState::new(
+            PkinitIdentity {
+                cert_der: pq_cert_der,
+                key_pkcs8_der: vec![],
+                chain: vec![],
+            },
+            TrustStore::new(),
+            PkinitClientConfig::default(),
+        );
+        assert!(state.has_pq_certificate());
+        state.key_exchange = Some(KeyExchangeType::Dh(DhGroup::Oakley2048));
+
+        let padata_der = wrap_as_td_dh_parameters_padata(classical_dh_only_td_params());
+        let action = state.handle_tryagain(&padata_der).unwrap();
+        assert!(matches!(action, RetryAction::RetryWithDhParams(_)));
+    }
+
+    #[test]
+    fn downgrade_check_allows_dh_fallback_for_classical_cert_client() {
+        // A traditional-certificate client MAY fall back from a PQ KEM
+        // attempt to classical DH for backward compatibility with a
+        // non-upgraded KDC (draft-bokovoy-kitten-pkinit-pqc, last paragraph
+        // of the Downgrade Prevention section).
+        let mut state = PkinitClientState::new(
+            PkinitIdentity {
+                cert_der: vec![],
+                key_pkcs8_der: vec![],
+                chain: vec![],
+            },
+            TrustStore::new(),
+            PkinitClientConfig::default(),
+        );
+        assert!(!state.has_pq_certificate());
+        state.key_exchange = Some(KeyExchangeType::Kem(KemAlgorithm::MlKem768));
+
+        let padata_der = wrap_as_td_dh_parameters_padata(classical_dh_only_td_params());
+        let action = state.handle_tryagain(&padata_der).unwrap();
+        assert!(matches!(action, RetryAction::RetryWithDhParams(_)));
+    }
+
+    #[test]
+    fn downgrade_rejects_kem_reply_signed_with_classical_algorithm() {
+        // The KDC's kemSignedData must be signed with a quantum-resistant
+        // algorithm when the client is committed to post-quantum security
+        // (PQ cert + KEM path). A classically-signed reply must be rejected
+        // before any of its content is trusted.
+        let (pq_cert_der, _) = crate::test_support::build_pq_signing_identity();
+        let (kdc_cert_der, kdc_key_pkcs8_der) =
+            crate::test_support::build_classical_signing_identity();
+
+        let mut state = PkinitClientState::new(
+            PkinitIdentity {
+                cert_der: pq_cert_der,
+                key_pkcs8_der: vec![],
+                chain: vec![],
+            },
+            TrustStore::new(),
+            PkinitClientConfig::default(),
+        );
+        assert!(state.has_pq_certificate());
+        state.kem_key = Some(KemKeyPair::generate(KemAlgorithm::MlKem768).unwrap());
+
+        // The signed content itself is never reached (the downgrade check
+        // runs before it's decoded), so arbitrary bytes are fine here.
+        let signer_key = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+            kdc_key_pkcs8_der,
+        );
+        let kem_signed_data = crate::crypto::cms::create_signed_data(
+            b"placeholder KDCKEMInfo content",
+            constants::ID_PKINIT_KEM_KEY_DATA,
+            &signer_key,
+            &kdc_cert_der,
+            &[],
+            "sha256",
+        )
+        .expect("sign KEMRepInfo content");
+
+        let kem_rep_info = crate::kem_types::KemRepInfo {
+            kem_signed_data: synta::OctetString::new(kem_signed_data),
+        };
+        let pa_rep_der = crate::kem_types::encode_kem_rep_wrapper(&kem_rep_info)
+            .expect("encode KEMRepInfo wrapper");
+
+        let params = AsRepParams {
+            nonce: 1,
+            enctype: 18,
+            as_req_der: b"as-req",
+            pa_rep_raw: &pa_rep_der,
+            client_name: "user@EXAMPLE.COM",
+            server_name: "krbtgt/EXAMPLE.COM@EXAMPLE.COM",
+        };
+        struct NoopO2K;
+        impl OctetString2Key for NoopO2K {
+            fn random_to_key(
+                &self,
+                _enctype: i32,
+                random_data: &[u8],
+            ) -> Result<native_ossl::util::SecretBuf, PkinitError> {
+                Ok(native_ossl::util::SecretBuf::new(random_data.to_vec()))
+            }
+            fn random_length(&self, _enctype: i32) -> Result<usize, PkinitError> {
+                Ok(32)
+            }
+            fn key_length(&self, _enctype: i32) -> Result<usize, PkinitError> {
+                Ok(32)
+            }
+        }
+
+        match state.process_kem_rep(&pa_rep_der, &params, &NoopO2K) {
+            Err(PkinitError::DowngradeRejected(_)) => {}
+            Err(e) => panic!("expected DowngradeRejected, got {e:?}"),
+            Ok(_) => panic!("expected DowngradeRejected, got Ok"),
+        }
     }
 }
