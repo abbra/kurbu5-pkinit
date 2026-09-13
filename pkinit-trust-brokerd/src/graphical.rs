@@ -1,26 +1,58 @@
 //! Desktop-notification prompter: presents the trust decision as an
-//! actionable notification with a button per [`GRANT_PRESETS`] duration plus
-//! an explicit deny button.
+//! actionable notification with a small, fixed set of buttons.
 //!
 //! This targets `org.freedesktop.Notifications` rather than a dedicated GUI
 //! toolkit or an XDG desktop portal: essentially every Linux desktop
 //! environment ships a notification daemon that implements it (GNOME, KDE
-//! Plasma, XFCE, MATE, Cinnamon, LXQt, sway/wlroots via mako or dunst, ...),
-//! whereas portal *backends* for interactive dialogs are not universally
-//! deployed. No GUI toolkit dependency is pulled into the daemon.
+//! Plasma, XFCE, MATE, Cinnamon, LXQt, sway/wlroots via mako or dunst, ...).
+//! The XDG desktop portal `Access` dialog was considered instead (it can
+//! show an unbounded list of choices in a combo box rather than one button
+//! per choice), but isn't reliably there either — e.g. it's absent from
+//! GNOME's own portal backend (`xdg-desktop-portal-gnome`) as of this
+//! writing, verified against a real GNOME session, not just documentation.
+//! No GUI toolkit dependency is pulled into the daemon either way.
 //!
-//! Some notification daemons render only the first couple of actions as
-//! inline buttons and hide the rest behind an expand affordance (or, rarely,
-//! ignore actions entirely). The full set of choices is always spelled out
-//! in the notification body so the user isn't stuck with just what's
-//! visible; `--ui tty` remains available for environments where this isn't
-//! acceptable.
+//! Notification *actions* (buttons) are a much more fragile UI surface than
+//! that combo box would have been: the notification daemon/shell decides
+//! how many to actually render, with no capability query to ask in advance,
+//! and at least GNOME Shell silently drops whichever don't fit rather than
+//! ever exposing them — there is no "..." or scroll affordance. Registering
+//! one button per [`GRANT_PRESETS`] entry plus Deny (six actions) meant that
+//! on a shell rendering only three, users saw 15 minutes / 1 hour / 1 day
+//! and never Deny at all, which is a worse failure mode than not offering
+//! every duration: a security prompt must never make "reject" the one
+//! option that silently disappears. So [`GUI_CHOICES`] is a short, fixed
+//! list — Deny first, so it's the one guaranteed to survive truncation in
+//! an even more constrained environment than the one this was checked
+//! against. Finer-grained duration control (15 minutes, 1 day, 1 week)
+//! remains available via `--ui tty` or the client's own terminal.
+//!
+//! The body text has the same problem one level down: a banner notification
+//! shows only the first few lines of it before cutting off, silently, with
+//! no "..." either — so it carries just the two lines a person actually
+//! needs to decide (the CA's subject and fingerprint), not the KDC
+//! principal, an explanatory sentence, or the full duration list, all of
+//! which used to push the fingerprint itself half out of view.
+
+use std::time::Duration;
 
 use notify_rust::{Notification, Urgency};
 
-use pkinit_trust_brokerd::store::{GRANT_PRESETS, GrantTtl, Prompter, TrustRequest};
+use pkinit_trust_brokerd::store::{GrantTtl, Prompter, TrustRequest};
 
 const DENY_ACTION: &str = "deny";
+
+/// Notification action buttons, in registration order (see module docs for
+/// why this is short and Deny-first rather than one button per
+/// [`GRANT_PRESETS`] entry).
+const GUI_CHOICES: &[(&str, &str, GrantTtl)] = &[
+    (
+        "grant-1h",
+        "Trust 1 hour",
+        GrantTtl::For(Duration::from_secs(60 * 60)),
+    ),
+    ("grant-forever", "Trust always", GrantTtl::Forever),
+];
 
 /// Prompts via a desktop notification. Falls back to `fallback` when no
 /// notification daemon is reachable, or the reachable one can't render
@@ -51,17 +83,7 @@ impl NotifyPrompter {
             return Err("notification server does not support actions".into());
         }
 
-        let choices = GRANT_PRESETS
-            .iter()
-            .map(|(label, _)| format!("  \u{2022} {label}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let body = format!(
-            "KDC principal: {}\nCA subject: {}\nSHA-256: {}\n\n\
-             This certificate authority is not yet trusted for this realm. \
-             Choose how long to trust it:\n{choices}",
-            req.kdc_principal, req.ca_subject, req.fingerprint,
-        );
+        let body = format!("{}\nSHA-256: {}", req.ca_subject, req.fingerprint);
 
         let mut notification = Notification::new();
         notification
@@ -73,20 +95,21 @@ impl NotifyPrompter {
             .body(&body)
             .icon("dialog-password")
             .urgency(Urgency::Critical)
-            .timeout(Timeout::Never);
-        for (i, (label, _)) in GRANT_PRESETS.iter().enumerate() {
-            notification.action(&format!("grant-{i}"), label);
-        }
+            // Use 5 minutes (300s) for timeout
+            .timeout(Duration::from_secs(300));
+        // Deny first: the one action guaranteed to survive truncation on a
+        // notification UI that renders only some of what we register (see
+        // module docs) must be the one that fails closed, not a grant.
         notification.action(DENY_ACTION, "Deny");
+        for (id, label, _) in GUI_CHOICES {
+            notification.action(id, label);
+        }
 
         let handle = notification.show()?;
         let mut decision = None;
         handle.wait_for_action(|action| {
-            if let Some(idx) = action
-                .strip_prefix("grant-")
-                .and_then(|s| s.parse::<usize>().ok())
-            {
-                decision = GRANT_PRESETS.get(idx).map(|(_, ttl)| *ttl);
+            if let Some((_, _, ttl)) = GUI_CHOICES.iter().find(|(id, _, _)| *id == action) {
+                decision = Some(*ttl);
             }
             // Any other action (the explicit "deny", the notification being
             // closed, an unrecognized id) leaves `decision` as `None`, i.e.
