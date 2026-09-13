@@ -5,7 +5,9 @@
 //!   pkinit-trust-brokerd [SOCKET] [--auto approve|deny] [--state FILE] [--ui auto|gui|tty]
 //!
 //!   SOCKET            Unix socket path to bind (default:
-//!                     $XDG_RUNTIME_DIR/pkinit-kdc-trust.sock).
+//!                     $XDG_RUNTIME_DIR/pkinit-kdc-trust.sock). Ignored under
+//!                     systemd socket activation (see below), which supplies
+//!                     an already-bound, already-listening socket instead.
 //!   --auto approve    Non-interactively approve unknown realms (CI/testing).
 //!   --auto deny       Non-interactively deny unknown realms (CI/testing).
 //!   --state FILE      Persist pins to (and load them from) FILE.
@@ -17,10 +19,17 @@
 //!                     $WAYLAND_DISPLAY set) and falls back to the terminal
 //!                     otherwise, or if the notification daemon can't help.
 //!                     Ignored when --auto is given.
+//!
+//! Autoactivation: when started with `LISTEN_PID`/`LISTEN_FDS` set (i.e. by
+//! systemd socket activation, per sd_listen_fds(3)), the daemon uses the
+//! socket systemd already bound and is listening on instead of binding
+//! SOCKET itself. See `contrib/systemd/` for reference unit files that wire
+//! this up as an on-demand per-user service.
 
 mod graphical;
 
 use std::io::{BufRead, Write};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 
 use graphical::NotifyPrompter;
@@ -81,6 +90,34 @@ struct Args {
 /// daemon actually running, or a headless X server).
 fn graphical_session_hint() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some()
+}
+
+/// First fd systemd passes on socket activation, per sd_listen_fds(3).
+const SD_LISTEN_FDS_START: RawFd = 3;
+
+/// If we were started via systemd socket activation, take ownership of the
+/// socket it already bound and is listening on. Returns `None` (so the
+/// caller binds SOCKET itself) when `LISTEN_PID` is absent, malformed, or
+/// names a different process — the last case matters because these env vars
+/// are inherited across `exec`, so a process socket-activated once must not
+/// have a child mistake stale values for its own activation.
+fn systemd_activation_fd() -> Option<OwnedFd> {
+    let listen_pid: u32 = std::env::var("LISTEN_PID").ok()?.parse().ok()?;
+    if listen_pid != std::process::id() {
+        return None;
+    }
+    let listen_fds: usize = std::env::var("LISTEN_FDS").ok()?.parse().ok()?;
+    if listen_fds == 0 {
+        return None;
+    }
+    if listen_fds > 1 {
+        eprintln!(
+            "pkinit-trust-brokerd: warning: systemd passed {listen_fds} sockets, expected 1; using the first"
+        );
+    }
+    // SAFETY: LISTEN_PID matching our own pid means systemd opened
+    // SD_LISTEN_FDS_START for this exact process and hands us ownership.
+    Some(unsafe { OwnedFd::from_raw_fd(SD_LISTEN_FDS_START) })
 }
 
 fn prompter_for(ui: UiMode) -> Box<dyn Prompter> {
@@ -166,12 +203,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let path = args.socket;
-    let _ = std::fs::remove_file(&path);
     smol::block_on(async {
-        let listener = unix::bind(&path)?;
+        let (listener, via) = match systemd_activation_fd() {
+            Some(fd) => (unix::Listener::try_from(fd)?, "systemd socket activation"),
+            None => {
+                let _ = std::fs::remove_file(&path);
+                (unix::bind(&path)?, "direct bind")
+            }
+        };
         let broker = Broker::new(store, args.prompter);
         let server = Server::new(listener, broker);
-        eprintln!("pkinit-trust-brokerd listening on {}", path.display());
+        eprintln!(
+            "pkinit-trust-brokerd listening on {} ({via})",
+            path.display()
+        );
         server.run().await?;
         Ok::<_, Box<dyn std::error::Error>>(())
     })?;
