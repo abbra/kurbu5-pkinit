@@ -14,7 +14,7 @@ use synta_x509_verification::{
     ExtensionPolicy, OwnedStore, PolicyDefinition, ValidationProfile, VerificationCertificate,
 };
 
-use pkinit_trust_proto::{Decision, TrustReply};
+use pkinit_trust_proto::{Decision, TrustReply, TrustedRealm};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Pin {
@@ -309,6 +309,24 @@ impl PinStore {
         }
     }
 
+    /// Every realm currently trusted (i.e. holding a live, unexpired pin),
+    /// as the wire type a separate client uses to write permanent
+    /// `pkinit_anchors` configuration. A lapsed grant is excluded, matching
+    /// `decide`'s treatment of it as no longer trusted.
+    pub fn trusted_realms(&self) -> Vec<TrustedRealm> {
+        let now = now_secs();
+        self.pins
+            .iter()
+            .filter(|(_, pin)| !pin.expires_at.is_some_and(|exp| now >= exp))
+            .map(|(realm, pin)| TrustedRealm {
+                realm: realm.clone(),
+                ca_der: pin.ca_b64.clone(),
+                fingerprint: pin.fingerprint.clone(),
+                expires_at: pin.expires_at,
+            })
+            .collect()
+    }
+
     fn persist(&self) -> std::io::Result<()> {
         if let Some(path) = &self.path {
             let json = serde_json::to_vec_pretty(&self.pins).unwrap_or_default();
@@ -522,5 +540,60 @@ mod tests {
         let mut reloaded = PinStore::open(path).unwrap();
         let again = reloaded.decide("R", KDC_PRINCIPAL, None, &signer, &certs, false, &No);
         assert_eq!(again.decision, Decision::Trusted);
+    }
+
+    #[test]
+    fn trusted_realms_lists_live_pins_with_wire_fields() {
+        let mut store = PinStore::in_memory();
+        let (signer, certs) = alice();
+        let ca_b64 = base64::engine::general_purpose::STANDARD.encode(&certs[0]);
+        let fp = PinStore::sha256_hex(&certs[0]);
+
+        let _ = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
+
+        let realms = store.trusted_realms();
+        assert_eq!(realms.len(), 1);
+        assert_eq!(realms[0].realm, "R");
+        assert_eq!(realms[0].ca_der, ca_b64);
+        assert_eq!(realms[0].fingerprint, fp);
+        assert_eq!(realms[0].expires_at, None);
+    }
+
+    #[test]
+    fn trusted_realms_excludes_expired_pins() {
+        let mut store = PinStore::in_memory();
+        let (signer, certs) = alice();
+        let _ = store.decide(
+            "R",
+            KDC_PRINCIPAL,
+            None,
+            &signer,
+            &certs,
+            true,
+            &ExpiredOnArrival,
+        );
+        assert_eq!(store.trusted_realms(), vec![]);
+    }
+
+    #[test]
+    fn trusted_realms_reports_finite_expiry() {
+        let mut store = PinStore::in_memory();
+        let (signer, certs) = alice();
+
+        struct OneHour;
+        impl Prompter for OneHour {
+            fn confirm(&self, _req: &TrustRequest<'_>) -> Option<GrantTtl> {
+                Some(GrantTtl::For(Duration::from_secs(3600)))
+            }
+        }
+
+        let before = now_secs();
+        let _ = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &OneHour);
+        let after = now_secs();
+
+        let realms = store.trusted_realms();
+        assert_eq!(realms.len(), 1);
+        let expires_at = realms[0].expires_at.expect("finite grant has an expiry");
+        assert!(expires_at >= before + 3600 && expires_at <= after + 3600);
     }
 }

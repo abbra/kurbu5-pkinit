@@ -887,6 +887,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pkinit-trust-ctl"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "pkinit-core",
+ "pkinit-trust-brokerd",
+ "pkinit-trust-proto",
+ "smol",
+ "tempfile",
+ "zlink-smol",
+]
+
+[[package]]
 name = "pkinit-trust-proto"
 version = "0.1.0"
 dependencies = [

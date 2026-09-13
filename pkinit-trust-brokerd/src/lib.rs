@@ -8,7 +8,7 @@ extern crate zlink_smol as zlink;
 pub mod store;
 
 use base64::Engine;
-use pkinit_trust_proto::{KdcTrustError, TrustReply};
+use pkinit_trust_proto::{KdcTrustError, TrustReply, TrustStoreReply};
 use zlink::connection::socket::FetchPeerCredentials;
 use zlink::service;
 
@@ -80,5 +80,13 @@ where
             reply.decision
         );
         Ok(reply)
+    }
+
+    /// Snapshot of every realm currently trusted, for a separate client to
+    /// turn into permanent `pkinit_anchors` configuration.
+    async fn list_trusted_realms(&mut self) -> Result<TrustStoreReply, KdcTrustError<'_>> {
+        Ok(TrustStoreReply {
+            realms: self.store.trusted_realms(),
+        })
     }
 }
