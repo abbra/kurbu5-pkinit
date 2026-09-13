@@ -5,7 +5,7 @@ mechanism (RFC 4556), built as a loadable MIT krb5 preauth plugin.
 
 ## Overview
 
-The workspace is split into two crates:
+The workspace is split into several crates:
 
 - **`pkinit-core`** — a pure Rust library with no dependency on MIT krb5.
   It implements the PKINIT protocol state machines (client and KDC side),
@@ -15,6 +15,14 @@ The workspace is split into two crates:
   to MIT Kerberos via the [`kurbu5-rs`](https://crates.io/crates/kurbu5-rs)
   plugin bindings. It builds a single shared object exporting the
   `clpreauth`, `kdcpreauth`, and `certauth` plugin entry points.
+- **`pkinit-trust-proto`** — the [varlink](https://varlink.org/) interface
+  shared by the plugin and the trust broker (see
+  [TOFU](#kdc-ca-trust-on-first-use-tofu) below).
+- **`pkinit-trust-brokerd`** — a reference trust broker daemon: the varlink
+  service that owns TOFU policy and prompts the user.
+- **`pkinit-trust-ctl`** — a separate client for the broker that lists or
+  exports its current trust store as permanent `pkinit_anchors`
+  configuration.
 
 ASN.1 encoding/decoding, X.509 parsing, and certificate chain validation are
 provided by the [`synta`](https://crates.io/crates/synta) family of crates;
@@ -191,6 +199,35 @@ The first connection (i.e. the first anonymous PKINIT exchange with an
 unknown KDC) starts the service on demand. The default `--ui auto` works
 fine even though the service itself has no controlling terminal, since the
 tty fallback prompts on the *client's* terminal rather than the broker's.
+
+### Promoting a TOFU decision to permanent trust
+
+The broker's pins are soft state: a time-boxed grant expires, and even a
+"forever" pin only lives as long as the broker's `--state` file. `pkinit-trust-ctl`
+is a separate client (ships in this workspace, alongside the daemon and
+plugin) that queries the broker's trust store over the same varlink socket
+and turns it into ordinary `pkinit_anchors` configuration, so a realm the
+user has already confirmed no longer depends on the broker at all:
+
+```sh
+$ pkinit-trust-ctl list
+REALM                          FINGERPRINT (SHA-256)                                            EXPIRES
+DEMO.EXAMPLE.COM               4cc0714e28e1b114cb8117f6fce04cbb167fc73a7c8b23929c3718779b6ce8c9 never
+
+$ pkinit-trust-ctl export --anchors-dir /etc/pki/pkinit/anchors
+wrote /etc/pki/pkinit/anchors/DEMO.EXAMPLE.COM.pem
+[realms]
+ DEMO.EXAMPLE.COM = {
+  pkinit_anchors = FILE:/etc/pki/pkinit/anchors/DEMO.EXAMPLE.COM.pem
+ }
+```
+
+`export` writes one PEM file per currently-trusted realm and prints the
+matching `[realms]` snippet (or writes it to `--conf-snippet FILE` instead of
+stdout); nothing is ever written into an existing `krb5.conf` directly — paste
+the snippet in by hand, or point `--conf-snippet` at a file pulled in via
+`krb5.conf`'s `includedir`. Expired grants are never included, so a lapsed
+TOFU decision can't accidentally become a permanent one.
 
 ## Testing
 

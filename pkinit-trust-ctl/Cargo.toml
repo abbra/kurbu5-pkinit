@@ -1,0 +1,17 @@
+[package]
+name = "pkinit-trust-ctl"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Reference client for pkinit-trust-brokerd: lists trusted realms and writes permanent pkinit_anchors configuration"
+
+[dependencies]
+pkinit-trust-proto = { path = "../pkinit-trust-proto" }
+zlink-smol = "0.4"
+smol = "2"
+base64 = "0.22"
+
+[dev-dependencies]
+pkinit-trust-brokerd = { path = "../pkinit-trust-brokerd" }
+pkinit-core = { path = "../pkinit-core", features = ["test-util"] }
+tempfile = "3"

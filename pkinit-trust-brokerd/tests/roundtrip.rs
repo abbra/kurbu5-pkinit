@@ -44,11 +44,17 @@ fn interactive_pins_then_noninteractive_trusts() {
             assert_eq!(r1.decision, Decision::Trusted);
 
             let r2 = conn
-                .request_trust("R", "krbtgt/R@R", &leaf_b64, vec![ca_b64], false)
+                .request_trust("R", "krbtgt/R@R", &leaf_b64, vec![ca_b64.clone()], false)
                 .await
                 .unwrap()
                 .unwrap();
             assert_eq!(r2.decision, Decision::Trusted);
+
+            let store = conn.list_trusted_realms().await.unwrap().unwrap();
+            assert_eq!(store.realms.len(), 1);
+            assert_eq!(store.realms[0].realm, "R");
+            assert_eq!(store.realms[0].ca_der, ca_b64);
+            assert_eq!(store.realms[0].expires_at, None);
         };
 
         // Run server and client concurrently; return when the client is done.

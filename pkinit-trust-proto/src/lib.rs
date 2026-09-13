@@ -43,6 +43,28 @@ pub struct TrustReply {
     pub reason: Option<String>,
 }
 
+/// One realm's currently active trust pin, as returned by
+/// `ListTrustedRealms`. Excludes pins whose time-boxed grant has lapsed —
+/// those are no longer trusted, so callers building permanent config from
+/// this list never pick up a stale grant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustedRealm {
+    pub realm: String,
+    /// Base64 DER of the pinned CA certificate.
+    pub ca_der: String,
+    /// Lowercase hex SHA-256 of the CA DER.
+    pub fingerprint: String,
+    /// Unix time the grant lapses; absent if granted "forever".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+}
+
+/// Reply to `ListTrustedRealms`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustStoreReply {
+    pub realms: Vec<TrustedRealm>,
+}
+
 /// Varlink errors the broker may return.
 #[derive(Debug, PartialEq, ReplyError, introspect::ReplyError)]
 #[zlink(interface = "org.kurbu5.pkinit.KdcTrust")]
@@ -62,6 +84,14 @@ pub trait KdcTrustProxy {
         presented_certs: Vec<String>,
         interactive: bool,
     ) -> zlink::Result<Result<TrustReply, KdcTrustError<'_>>>;
+
+    /// Snapshot of every realm the broker currently trusts (i.e. holds a
+    /// live, unexpired pin for) — what a separate client uses to write out
+    /// permanent `pkinit_anchors` configuration once a user has confirmed a
+    /// CA through the usual TOFU prompt.
+    async fn list_trusted_realms(
+        &mut self,
+    ) -> zlink::Result<Result<TrustStoreReply, KdcTrustError<'_>>>;
 }
 
 #[cfg(test)]
@@ -96,5 +126,29 @@ mod tests {
         let back: TrustReply = serde_json::from_str(&json).unwrap();
         assert!(matches!(back.decision, Decision::Denied));
         assert_eq!(back.reason.as_deref(), Some("user declined"));
+    }
+
+    #[test]
+    fn trust_store_reply_round_trips() {
+        let reply = TrustStoreReply {
+            realms: vec![
+                TrustedRealm {
+                    realm: "EXAMPLE.COM".to_string(),
+                    ca_der: "QUJD".to_string(),
+                    fingerprint: "ab12".to_string(),
+                    expires_at: Some(1_800_000_000),
+                },
+                TrustedRealm {
+                    realm: "OTHER.EXAMPLE.COM".to_string(),
+                    ca_der: "REVG".to_string(),
+                    fingerprint: "cd34".to_string(),
+                    expires_at: None,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&reply).unwrap();
+        assert!(!json.contains("\"expires_at\":null")); // None is skipped
+        let back: TrustStoreReply = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, reply);
     }
 }
