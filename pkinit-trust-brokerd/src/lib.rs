@@ -41,9 +41,8 @@ impl Broker {
         presented_certs: Vec<String>,
         interactive: bool,
     ) -> Result<TrustReply, KdcTrustError<'_>> {
-        // kdc_principal is in the wire interface but the reference policy
-        // keys only on the realm.
-        let _ = kdc_principal;
+        // Trust is still keyed only on the realm; kdc_principal is passed
+        // through to the prompter purely for display.
         let signer = base64::engine::general_purpose::STANDARD
             .decode(signer_cert)
             .map_err(|_| KdcTrustError::InvalidRequest {
@@ -53,10 +52,9 @@ impl Broker {
             reason: "presented_certs not base64",
         })?;
 
-        let subject = format!("(CA for {realm})");
         let reply = self.store.decide(
             realm,
-            &subject,
+            kdc_principal,
             &signer,
             &presented,
             interactive,

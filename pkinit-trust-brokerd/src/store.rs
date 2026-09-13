@@ -1,8 +1,10 @@
 //! In-memory + on-disk pin store keyed by realm. Reference quality: a single
-//! JSON file, one entry per realm, storing the pinned CA DER and its SHA-256.
+//! JSON file, one entry per realm, storing the pinned CA DER, its SHA-256,
+//! and (for time-boxed grants) when the pin lapses.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,11 @@ pub struct Pin {
     pub ca_b64: String,
     /// Lowercase hex SHA-256 of the CA DER (for display).
     pub fingerprint: String,
+    /// Unix time the grant lapses. `None` means the pin was granted
+    /// "forever" and never expires on its own (only a changed CA revokes
+    /// it). Absent in state files written before grants had a duration.
+    #[serde(default)]
+    pub expires_at: Option<u64>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -29,23 +36,85 @@ pub struct PinStore {
     pins: HashMap<String, Pin>,
 }
 
-/// A prompter decides interactive (unknown-realm) requests. Returning `true`
-/// approves and pins; `false` denies. `Send` so the owning `Broker` service
-/// stays `Send` for the zlink server.
+/// How long an approved CA should be trusted before the broker forgets the
+/// pin and asks again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantTtl {
+    /// Trust indefinitely, until the realm presents a different CA.
+    Forever,
+    /// Trust for a bounded duration starting now.
+    For(Duration),
+}
+
+impl GrantTtl {
+    fn expires_at_epoch_secs(&self, now: u64) -> Option<u64> {
+        match self {
+            GrantTtl::Forever => None,
+            GrantTtl::For(d) => Some(now.saturating_add(d.as_secs())),
+        }
+    }
+}
+
+/// Preset grant durations offered to the user, shortest first. Shared by
+/// every interactive prompter so the choices stay consistent across UIs.
+pub const GRANT_PRESETS: &[(&str, GrantTtl)] = &[
+    ("15 minutes", GrantTtl::For(Duration::from_secs(15 * 60))),
+    ("1 hour", GrantTtl::For(Duration::from_secs(60 * 60))),
+    ("1 day", GrantTtl::For(Duration::from_secs(24 * 60 * 60))),
+    (
+        "1 week",
+        GrantTtl::For(Duration::from_secs(7 * 24 * 60 * 60)),
+    ),
+    ("forever", GrantTtl::Forever),
+];
+
+/// Everything a prompter needs to show the user (or a log) what trust is
+/// being requested.
+pub struct TrustRequest<'a> {
+    pub realm: &'a str,
+    pub kdc_principal: &'a str,
+    /// Subject DN of the CA the KDC presented.
+    pub ca_subject: &'a str,
+    /// Lowercase hex SHA-256 of the CA DER.
+    pub fingerprint: &'a str,
+}
+
+/// A prompter decides interactive (unknown-realm) requests. Returning
+/// `Some(ttl)` approves and pins for that duration; `None` denies. `Send` so
+/// the owning `Broker` service stays `Send` for the zlink server.
 pub trait Prompter: Send {
-    fn confirm(&self, realm: &str, subject: &str, fingerprint: &str) -> bool;
+    fn confirm(&self, req: &TrustRequest<'_>) -> Option<GrantTtl>;
 }
 
 /// A non-interactive prompter that always returns the same decision. Used in
-/// CI and tests where no controlling terminal is available.
+/// CI and tests where no controlling terminal is available. An approval is
+/// always granted "forever", matching pre-TTL automation semantics.
 pub struct AutoPrompter {
     pub approve: bool,
 }
 
 impl Prompter for AutoPrompter {
-    fn confirm(&self, _realm: &str, _subject: &str, _fingerprint: &str) -> bool {
-        self.approve
+    fn confirm(&self, _req: &TrustRequest<'_>) -> Option<GrantTtl> {
+        self.approve.then_some(GrantTtl::Forever)
     }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Best-effort human-readable Subject DN of a DER certificate, for display in
+/// trust prompts. `None` if the certificate can't be decoded — shouldn't
+/// happen for `ca`, which has already validated as an anchor by this point.
+fn subject_dn(der: &[u8]) -> Option<String> {
+    let cert: synta_certificate::Certificate<'_> =
+        Decoder::new(der, synta::Encoding::Der).decode().ok()?;
+    Some(synta_certificate::format_dn(
+        cert.tbs_certificate.subject.as_bytes(),
+    ))
 }
 
 /// Validate that `anchor_der` is a CA that terminates the presented signer
@@ -146,10 +215,12 @@ impl PinStore {
 
     /// Apply the decision table. Fail closed when the presented CMS chain has
     /// no valid CA certificate; the KDC signer is never used as a fallback.
+    /// A pin whose time-boxed grant has lapsed is forgotten and treated as an
+    /// unknown realm (re-prompting rather than trusting or denying blindly).
     pub fn decide(
         &mut self,
         realm: &str,
-        subject: &str,
+        kdc_principal: &str,
         signer_der: &[u8],
         presented_der: &[Vec<u8>],
         interactive: bool,
@@ -164,50 +235,68 @@ impl PinStore {
         };
         let fp = Self::sha256_hex(ca);
         let ca_b64 = base64::engine::general_purpose::STANDARD.encode(ca);
+        let now = now_secs();
 
-        match self.pins.get(realm) {
-            Some(existing) if existing.fingerprint == fp => TrustReply {
-                decision: Decision::Trusted,
-                anchors: vec![existing.ca_b64.clone()],
-                reason: None,
-            },
-            Some(_) => TrustReply {
-                decision: Decision::Denied,
-                anchors: vec![],
-                reason: Some("KDC CA changed for a known realm".into()),
-            },
-            None => {
-                if !interactive {
-                    return TrustReply {
-                        decision: Decision::Unknown,
-                        anchors: vec![],
-                        reason: None,
-                    };
-                }
-                if prompter.confirm(realm, subject, &fp) {
-                    self.pins.insert(
-                        realm.to_string(),
-                        Pin {
-                            ca_b64: ca_b64.clone(),
-                            fingerprint: fp,
-                        },
-                    );
-                    if let Err(e) = self.persist() {
-                        eprintln!("[broker] warning: failed to persist pins: {e}");
-                    }
+        if let Some(existing) = self.pins.get(realm) {
+            let expired = existing.expires_at.is_some_and(|exp| now >= exp);
+            if !expired {
+                return if existing.fingerprint == fp {
                     TrustReply {
                         decision: Decision::Trusted,
-                        anchors: vec![ca_b64],
+                        anchors: vec![existing.ca_b64.clone()],
                         reason: None,
                     }
                 } else {
                     TrustReply {
                         decision: Decision::Denied,
                         anchors: vec![],
-                        reason: Some("user declined".into()),
+                        reason: Some("KDC CA changed for a known realm".into()),
                     }
+                };
+            }
+        }
+        // No live pin: either never seen, or a prior time-boxed grant lapsed.
+        self.pins.remove(realm);
+
+        if !interactive {
+            return TrustReply {
+                decision: Decision::Unknown,
+                anchors: vec![],
+                reason: None,
+            };
+        }
+
+        let ca_subject = subject_dn(ca).unwrap_or_else(|| format!("(CA for {realm})"));
+        let req = TrustRequest {
+            realm,
+            kdc_principal,
+            ca_subject: &ca_subject,
+            fingerprint: &fp,
+        };
+        match prompter.confirm(&req) {
+            Some(ttl) => {
+                self.pins.insert(
+                    realm.to_string(),
+                    Pin {
+                        ca_b64: ca_b64.clone(),
+                        fingerprint: fp,
+                        expires_at: ttl.expires_at_epoch_secs(now),
+                    },
+                );
+                if let Err(e) = self.persist() {
+                    eprintln!("[broker] warning: failed to persist pins: {e}");
+                }
+                TrustReply {
+                    decision: Decision::Trusted,
+                    anchors: vec![ca_b64],
+                    reason: None,
                 }
             }
+            None => TrustReply {
+                decision: Decision::Denied,
+                anchors: vec![],
+                reason: Some("user declined".into()),
+            },
         }
     }
 
@@ -225,17 +314,28 @@ mod tests {
     use super::*;
     use pkinit_core::test_support::build_kdc_chain;
 
+    const KDC_PRINCIPAL: &str = "krbtgt/R@R";
+
     struct Yes;
     impl Prompter for Yes {
-        fn confirm(&self, _: &str, _: &str, _: &str) -> bool {
-            true
+        fn confirm(&self, _req: &TrustRequest<'_>) -> Option<GrantTtl> {
+            Some(GrantTtl::Forever)
         }
     }
 
     struct No;
     impl Prompter for No {
-        fn confirm(&self, _: &str, _: &str, _: &str) -> bool {
-            false
+        fn confirm(&self, _req: &TrustRequest<'_>) -> Option<GrantTtl> {
+            None
+        }
+    }
+
+    /// Grants approval that lapses the instant it's issued (TTL of 0
+    /// seconds), so the very next `decide()` call sees it as expired.
+    struct ExpiredOnArrival;
+    impl Prompter for ExpiredOnArrival {
+        fn confirm(&self, _req: &TrustRequest<'_>) -> Option<GrantTtl> {
+            Some(GrantTtl::For(Duration::from_secs(0)))
         }
     }
 
@@ -253,7 +353,7 @@ mod tests {
     fn unknown_non_interactive_is_unknown() {
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
-        let r = store.decide("R", "CN=CA", &signer, &certs, false, &No);
+        let r = store.decide("R", KDC_PRINCIPAL, &signer, &certs, false, &No);
         assert_eq!(r.decision, Decision::Unknown);
     }
 
@@ -261,9 +361,9 @@ mod tests {
     fn unknown_interactive_yes_pins_then_trusts_again() {
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
-        let first = store.decide("R", "CN=CA", &signer, &certs, true, &Yes);
+        let first = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
         assert_eq!(first.decision, Decision::Trusted);
-        let second = store.decide("R", "CN=CA", &signer, &certs, false, &No);
+        let second = store.decide("R", KDC_PRINCIPAL, &signer, &certs, false, &No);
         assert_eq!(second.decision, Decision::Trusted);
     }
 
@@ -271,9 +371,9 @@ mod tests {
     fn changed_ca_is_denied() {
         let mut store = PinStore::in_memory();
         let (signer_a, certs_a) = alice();
-        let _ = store.decide("R", "CN=CA", &signer_a, &certs_a, true, &Yes);
+        let _ = store.decide("R", KDC_PRINCIPAL, &signer_a, &certs_a, true, &Yes);
         let (signer_b, certs_b) = bob();
-        let changed = store.decide("R", "CN=CA", &signer_b, &certs_b, true, &Yes);
+        let changed = store.decide("R", KDC_PRINCIPAL, &signer_b, &certs_b, true, &Yes);
         assert_eq!(changed.decision, Decision::Denied);
     }
 
@@ -281,14 +381,14 @@ mod tests {
     fn unknown_interactive_no_is_denied() {
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
-        let r = store.decide("R", "CN=CA", &signer, &certs, true, &No);
+        let r = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &No);
         assert_eq!(r.decision, Decision::Denied);
     }
 
     #[test]
     fn empty_chain_is_denied() {
         let mut store = PinStore::in_memory();
-        let r = store.decide("R", "CN=CA", b"leaf", &[], true, &Yes);
+        let r = store.decide("R", KDC_PRINCIPAL, b"leaf", &[], true, &Yes);
         assert_eq!(r.decision, Decision::Denied);
     }
 
@@ -297,22 +397,31 @@ mod tests {
         let mut store = PinStore::in_memory();
         let (signer, _) = alice();
         let certs = vec![signer.clone()];
-        let r = store.decide("R", "CN=KDC", &signer, &certs, true, &Yes);
+        let r = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
         assert_eq!(r.decision, Decision::Denied);
     }
 
     #[test]
     fn auto_prompter_returns_its_decision() {
-        assert!(AutoPrompter { approve: true }.confirm("R", "s", "fp"));
-        assert!(!AutoPrompter { approve: false }.confirm("R", "s", "fp"));
+        let req = TrustRequest {
+            realm: "R",
+            kdc_principal: KDC_PRINCIPAL,
+            ca_subject: "CN=CA",
+            fingerprint: "fp",
+        };
+        assert_eq!(
+            AutoPrompter { approve: true }.confirm(&req),
+            Some(GrantTtl::Forever)
+        );
+        assert_eq!(AutoPrompter { approve: false }.confirm(&req), None);
     }
 
     #[test]
     fn empty_chain_on_known_realm_denies() {
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
-        let _ = store.decide("R", "CN=CA", &signer, &certs, true, &Yes);
-        let empty = store.decide("R", "CN=CA", &signer, &[], true, &Yes);
+        let _ = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
+        let empty = store.decide("R", KDC_PRINCIPAL, &signer, &[], true, &Yes);
         assert_eq!(empty.decision, Decision::Denied);
     }
 
@@ -322,11 +431,11 @@ mod tests {
         let path = dir.path().join("pins.json");
         let (signer, certs) = alice();
         let mut store = PinStore::open(path.clone()).unwrap();
-        let first = store.decide("R", "CN=CA", &signer, &certs, true, &Yes);
+        let first = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
         assert_eq!(first.decision, Decision::Trusted);
         assert!(path.exists());
         let mut reloaded = PinStore::open(path).unwrap();
-        let again = reloaded.decide("R", "CN=CA", &signer, &certs, false, &No);
+        let again = reloaded.decide("R", KDC_PRINCIPAL, &signer, &certs, false, &No);
         assert_eq!(again.decision, Decision::Trusted);
     }
 
@@ -338,7 +447,54 @@ mod tests {
         std::fs::write(&path, seed).unwrap();
         let mut store = PinStore::open(path).unwrap();
         let (signer, certs) = alice();
-        let r = store.decide("R", "CN=CA", &signer, &certs, true, &Yes);
+        let r = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
         assert_eq!(r.decision, Decision::Denied);
+    }
+
+    #[test]
+    fn expired_grant_is_forgotten_not_denied() {
+        // A pin whose TTL has already lapsed must be treated as if the
+        // realm were unknown (re-prompt / Unknown), not as a live pin (which
+        // would either wrongly Trust or wrongly Deny-as-"CA changed").
+        let mut store = PinStore::in_memory();
+        let (signer, certs) = alice();
+        let first = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &ExpiredOnArrival);
+        assert_eq!(first.decision, Decision::Trusted);
+
+        let noninteractive = store.decide("R", KDC_PRINCIPAL, &signer, &certs, false, &No);
+        assert_eq!(noninteractive.decision, Decision::Unknown);
+    }
+
+    #[test]
+    fn expired_grant_reprompts_and_can_be_retrusted() {
+        let mut store = PinStore::in_memory();
+        let (signer, certs) = alice();
+        let _ = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &ExpiredOnArrival);
+        let again = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
+        assert_eq!(again.decision, Decision::Trusted);
+    }
+
+    #[test]
+    fn finite_grant_persists_expiry_and_survives_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pins.json");
+        let (signer, certs) = alice();
+
+        struct OneHour;
+        impl Prompter for OneHour {
+            fn confirm(&self, _req: &TrustRequest<'_>) -> Option<GrantTtl> {
+                Some(GrantTtl::For(Duration::from_secs(3600)))
+            }
+        }
+
+        let mut store = PinStore::open(path.clone()).unwrap();
+        let first = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &OneHour);
+        assert_eq!(first.decision, Decision::Trusted);
+
+        // Not yet expired: a fresh store loaded from disk must still trust
+        // it non-interactively.
+        let mut reloaded = PinStore::open(path).unwrap();
+        let again = reloaded.decide("R", KDC_PRINCIPAL, &signer, &certs, false, &No);
+        assert_eq!(again.decision, Decision::Trusted);
     }
 }
