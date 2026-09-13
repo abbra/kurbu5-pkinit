@@ -346,6 +346,44 @@ pub fn group_params_der(group: DhGroup) -> Option<&'static [u8]> {
     }
 }
 
+/// Identify the [`DhGroup`] a `TD-DH-PARAMETERS`/`TD-EPHEMERAL-KEY-PARAMETERS-DATA`
+/// entry names, from its bare `AlgorithmIdentifier` (algorithm OID plus
+/// domain parameters). This is the inverse of
+/// [`group_algorithm_oid_and_params`], which builds these same entries — and
+/// deliberately not [`validate_dh_params`], which parses a peer's actual
+/// `SubjectPublicKeyInfo` (algorithm *and* a BIT STRING public key). An
+/// advertised group has no public key material at all, so it can't be
+/// decoded the way a real SPKI can.
+pub fn group_from_algorithm_identifier(
+    oid: &[u32],
+    params_der: Option<&[u8]>,
+    min_bits: u32,
+) -> Option<DhGroup> {
+    if oid == synta_krb5::pkix1_algorithms2008::ID_EC_PUBLIC_KEY {
+        let curve_oid: synta::ObjectIdentifier =
+            synta::Decoder::new(params_der?, synta::Encoding::Der)
+                .decode()
+                .ok()?;
+        return match curve_oid.components() {
+            c if c == synta_krb5::pkix1_algorithms2008::SECP256R1 => Some(DhGroup::EcP256),
+            c if c == synta_krb5::pkix1_algorithms2008::SECP384R1 => Some(DhGroup::EcP384),
+            c if c == synta_krb5::pkix1_algorithms2008::SECP521R1 => Some(DhGroup::EcP521),
+            _ => None,
+        };
+    }
+    if oid == synta_krb5::pkix1_algorithms2008::DHPUBLICNUMBER {
+        let group = if params_der == Some(OAKLEY_2048_DER) {
+            DhGroup::Oakley2048
+        } else if params_der == Some(OAKLEY_4096_DER) {
+            DhGroup::Oakley4096
+        } else {
+            return None;
+        };
+        return (group.min_bits() >= min_bits).then_some(group);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

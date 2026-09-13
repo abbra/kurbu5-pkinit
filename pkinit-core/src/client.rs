@@ -684,7 +684,16 @@ fn parse_td_dh_parameters(data: &[u8], min_bits: u32) -> Option<DhGroup> {
 
     for elem in td.0.iter() {
         let elem_der = elem.to_der().ok()?;
-        if let Ok(group) = dh::validate_dh_params(&elem_der, min_bits) {
+        let alg_id: synta_certificate::AlgorithmIdentifier<'_> =
+            synta::Decoder::new(&elem_der, synta::Encoding::Der)
+                .decode()
+                .ok()?;
+        let params_der = alg_id.parameters.as_ref().and_then(|p| p.to_der().ok());
+        if let Some(group) = dh::group_from_algorithm_identifier(
+            alg_id.algorithm.components(),
+            params_der.as_deref(),
+            min_bits,
+        ) {
             return Some(group);
         }
     }
