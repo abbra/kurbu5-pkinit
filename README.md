@@ -149,6 +149,25 @@ to a terminal prompt. `--ui gui` and `--ui tty` force one or the other, and
 module docs at the top of `pkinit-trust-brokerd/src/main.rs` for the full
 flag reference.
 
+The daemon supports systemd socket activation (`sd_listen_fds(3)`), so it
+doesn't need to be started ahead of time: `contrib/systemd/` ships a
+reference `.socket`/`.service` pair for a per-user instance. Install them
+(adjusting the `ExecStart` path to wherever `pkinit-trust-brokerd` actually
+lives — this project ships no packaging yet) and enable the socket:
+
+```sh
+cp contrib/systemd/pkinit-trust-brokerd.{socket,service} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now pkinit-trust-brokerd.socket
+```
+
+The first connection (i.e. the first anonymous PKINIT exchange with an
+unknown KDC) starts the service on demand. Because a socket-activated
+service has no controlling terminal, its unit forces `--ui gui`: the
+notification prompter is the only prompting mode that can work there,
+falling back to a fail-closed deny (no stdin to read from) rather than a
+terminal prompt nobody can see if it can't reach a notification daemon.
+
 ## Testing
 
 ```sh

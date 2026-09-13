@@ -1,0 +1,13 @@
+[Unit]
+Description=PKINIT KDC-CA trust broker socket
+
+[Socket]
+# %t is $XDG_RUNTIME_DIR for a user unit — matches
+# pkinit_trust_proto::default_socket_path() and thus the client's default
+# pkinit_kdc_trust_broker path with no krb5.conf changes needed.
+ListenStream=%t/pkinit-kdc-trust.sock
+FileDescriptorName=pkinit-kdc-trust
+Accept=no
+
+[Install]
+WantedBy=sockets.target
