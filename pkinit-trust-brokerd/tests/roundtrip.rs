@@ -2,7 +2,7 @@
 //! proxy client from `pkinit-trust-proto`.
 
 use base64::Engine;
-use pkinit_core::test_support::build_kdc_chain;
+use pkinit_core::test_support::{build_kdc_chain, build_pq_kdc_chain};
 use pkinit_trust_brokerd::Broker;
 use pkinit_trust_brokerd::store::{GrantTtl, PinStore, Prompter, TrustRequest};
 use pkinit_trust_proto::{Decision, KdcTrustProxy};
@@ -58,6 +58,72 @@ fn interactive_pins_then_noninteractive_trusts() {
         };
 
         // Run server and client concurrently; return when the client is done.
+        let _ = smol::future::or(
+            async {
+                if let Err(e) = server.run().await {
+                    eprintln!("server error: {e:?}");
+                }
+            },
+            client,
+        )
+        .await;
+    });
+}
+
+/// Same as `interactive_pins_then_noninteractive_trusts`, but the KDC's CA
+/// is ML-DSA-65 (post-quantum) rather than ECDSA — RequestTrust and
+/// ListTrustedRealms must work identically over the wire regardless of the
+/// anchor's signature algorithm.
+#[test]
+fn post_quantum_ca_interactive_pins_then_noninteractive_trusts() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("t.sock");
+    let sock_client = sock.clone();
+    let chain = build_pq_kdc_chain("PQ.EXAMPLE.COM");
+
+    smol::block_on(async move {
+        let listener = unix::bind(&sock).unwrap();
+        let broker = Broker::new(PinStore::in_memory(), Box::new(AlwaysYes));
+        let server = Server::new(listener, broker);
+
+        let client = async move {
+            let mut conn = unix::connect(&sock_client).await.unwrap();
+            let ca_b64 = b64(&chain.ca_der);
+            let leaf_b64 = b64(&chain.kdc_leaf_der);
+
+            let r1 = conn
+                .request_trust(
+                    "PQ.EXAMPLE.COM",
+                    "krbtgt/PQ.EXAMPLE.COM@PQ.EXAMPLE.COM",
+                    &leaf_b64,
+                    vec![ca_b64.clone()],
+                    true,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(r1.decision, Decision::Trusted);
+
+            let r2 = conn
+                .request_trust(
+                    "PQ.EXAMPLE.COM",
+                    "krbtgt/PQ.EXAMPLE.COM@PQ.EXAMPLE.COM",
+                    &leaf_b64,
+                    vec![ca_b64.clone()],
+                    false,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(r2.decision, Decision::Trusted);
+
+            let store = conn.list_trusted_realms().await.unwrap().unwrap();
+            assert_eq!(store.realms.len(), 1);
+            assert_eq!(store.realms[0].realm, "PQ.EXAMPLE.COM");
+            assert_eq!(store.realms[0].ca_der, ca_b64);
+            assert_eq!(store.realms[0].expires_at, None);
+        };
+
         let _ = smol::future::or(
             async {
                 if let Err(e) = server.run().await {

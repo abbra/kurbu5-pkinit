@@ -339,7 +339,7 @@ impl PinStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pkinit_core::test_support::build_kdc_chain;
+    use pkinit_core::test_support::{build_kdc_chain, build_pq_kdc_chain};
 
     const KDC_PRINCIPAL: &str = "krbtgt/R@R";
 
@@ -373,6 +373,14 @@ mod tests {
 
     fn bob() -> (Vec<u8>, Vec<Vec<u8>>) {
         let chain = build_kdc_chain("B.OB");
+        (chain.kdc_leaf_der, vec![chain.ca_der])
+    }
+
+    /// Same shape as `alice()`, but the CA is ML-DSA-65 (post-quantum)
+    /// rather than ECDSA — chain validation must not assume the anchor's
+    /// signature algorithm.
+    fn carol_pq() -> (Vec<u8>, Vec<Vec<u8>>) {
+        let chain = build_pq_kdc_chain("CAROL.PQ");
         (chain.kdc_leaf_der, vec![chain.ca_der])
     }
 
@@ -595,5 +603,34 @@ mod tests {
         assert_eq!(realms.len(), 1);
         let expires_at = realms[0].expires_at.expect("finite grant has an expiry");
         assert!(expires_at >= before + 3600 && expires_at <= after + 3600);
+    }
+
+    #[test]
+    fn post_quantum_ca_is_pinned_then_trusted_again() {
+        // Chain validation (select_ca / validates_as_anchor) must accept an
+        // ML-DSA-signed anchor exactly like an ECDSA one — nothing in the
+        // decision path may assume a particular signature algorithm.
+        let mut store = PinStore::in_memory();
+        let (signer, certs) = carol_pq();
+        let first = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
+        assert_eq!(first.decision, Decision::Trusted);
+
+        let second = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, false, &No);
+        assert_eq!(second.decision, Decision::Trusted);
+    }
+
+    #[test]
+    fn trusted_realms_reports_post_quantum_ca() {
+        let mut store = PinStore::in_memory();
+        let (signer, certs) = carol_pq();
+        let ca_b64 = base64::engine::general_purpose::STANDARD.encode(&certs[0]);
+        let fp = PinStore::sha256_hex(&certs[0]);
+
+        let _ = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
+
+        let realms = store.trusted_realms();
+        assert_eq!(realms.len(), 1);
+        assert_eq!(realms[0].ca_der, ca_b64);
+        assert_eq!(realms[0].fingerprint, fp);
     }
 }
