@@ -133,9 +133,21 @@ The broker's approval selects which anchors to trust — the certificate chain,
 KDC EKU, and KDC SAN are still verified cryptographically. Everything fails
 closed: no broker, a timeout, or a denial aborts the exchange.
 
-A reference broker daemon (`pkinit-trust-brokerd`) that prompts on the terminal
-and remembers per-realm pins ships in this workspace; the varlink interface it
-speaks is defined in `pkinit-trust-proto`.
+A reference broker daemon (`pkinit-trust-brokerd`) that remembers per-realm
+pins ships in this workspace; the varlink interface it speaks is defined in
+`pkinit-trust-proto`. Each approval is time-boxed: the user picks how long to
+trust the CA (15 minutes, 1 hour, 1 day, 1 week, or forever); once a grant
+lapses, the broker forgets it and treats the realm as unknown again rather
+than either trusting or denying it outright.
+
+By default (`--ui auto`) the daemon prompts via a desktop notification
+(`org.freedesktop.Notifications`) with a button for each grant duration plus
+Deny, when a graphical session is detected (`$DISPLAY`/`$WAYLAND_DISPLAY`);
+otherwise, or if the notification daemon can't render actions, it falls back
+to a terminal prompt. `--ui gui` and `--ui tty` force one or the other, and
+`--auto approve|deny` remains for non-interactive CI/testing use. See the
+module docs at the top of `pkinit-trust-brokerd/src/main.rs` for the full
+flag reference.
 
 ## Testing
 

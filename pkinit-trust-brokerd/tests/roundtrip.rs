@@ -4,14 +4,14 @@
 use base64::Engine;
 use pkinit_core::test_support::build_kdc_chain;
 use pkinit_trust_brokerd::Broker;
-use pkinit_trust_brokerd::store::{PinStore, Prompter};
+use pkinit_trust_brokerd::store::{GrantTtl, PinStore, Prompter, TrustRequest};
 use pkinit_trust_proto::{Decision, KdcTrustProxy};
 use zlink_smol::{Server, unix};
 
 struct AlwaysYes;
 impl Prompter for AlwaysYes {
-    fn confirm(&self, _: &str, _: &str, _: &str) -> bool {
-        true
+    fn confirm(&self, _req: &TrustRequest<'_>) -> Option<GrantTtl> {
+        Some(GrantTtl::Forever)
     }
 }
 
