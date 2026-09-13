@@ -40,6 +40,17 @@ SUPPORTED_KEY_TYPES = {
     "mldsa87": ("mldsa87", None),
 }
 
+# Ticket encryption types the KDC supports and issues principal keys with
+# (unrelated to --key-type, which is the PKINIT certificate algorithm):
+# SHA-2 based AES (RFC 8009) rather than the older SHA-1 based AES (RFC
+# 3962). This is deliberately KDC-side only (supported_enctypes) -- forcing
+# the client's own enctype preference (e.g. via permitted_enctypes) is
+# explicitly discouraged by krb5.conf(5) ("do not use unless required...")
+# and empirically broke the anonymous/FAST-armored PKINIT exchange used by
+# TOFU here, so the negotiated session key enctype is left to the library's
+# own default negotiation.
+ENCTYPES = ("aes256-cts-hmac-sha384-192", "aes128-cts-hmac-sha256-128")
+
 
 class PkinitRealm:
     def __init__(self, testdir=None, realm=REALM, portbase=PORTBASE,
@@ -384,7 +395,7 @@ class PkinitRealm:
                     kdc_tcp_ports = {self.portbase}
                     max_life = 1h
                     max_renewable_life = 24h
-                    supported_enctypes = aes256-cts:normal aes128-cts:normal
+                    supported_enctypes = {" ".join(f"{e}:normal" for e in ENCTYPES)}
                     pkinit_identity = {kdc_identity}
                     pkinit_anchors = FILE:{self.ca_cert}
                     default_principal_flags = +preauth
