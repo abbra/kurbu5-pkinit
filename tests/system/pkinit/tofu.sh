@@ -10,6 +10,13 @@
 #   denial      broker auto-denies the unknown realm: kinit fails closed  -> PASS
 #   mitm        broker pre-seeded with a different CA for the realm: the
 #               presented CA mismatches the pin and is denied             -> PASS
+#   pq-happy-path  same as happy-path, but the CA/KDC/client chain is
+#                  ML-DSA-65 (FIPS 204) instead of ECDSA -- trust-broker
+#                  chain validation must not assume the anchor's algorithm -> PASS
+#   pq-tty-1day    same as pq-happy-path, but the broker runs with --ui tty
+#                  and the "user" confirms trust for 1 day by answering the
+#                  prompt on kinit's own controlling terminal (a real pty --
+#                  see pty_kinit.py), not --auto approve                   -> PASS
 #
 # Usage:
 #   bash tofu.sh [--report FILE]
@@ -72,12 +79,23 @@ ca_fingerprint() {
         | openssl dgst -sha256 2>/dev/null | awk '{print $NF}'
 }
 
-# run_scenario NAME TITLE EXPECTED MODE [SEED_BOGUS]
+# run_scenario NAME TITLE EXPECTED MODE [SEED_BOGUS] [KEY_TYPE] [ANSWER]
 #   EXPECTED   success | failure
-#   MODE       approve | deny        (--auto value for the broker)
+#   MODE       approve | deny | interactive
+#              approve/deny: --auto value for the broker (non-interactive).
+#              interactive: broker runs with --ui tty instead, and kinit is
+#              given a real pty (via pty_kinit.py) so the client-tty
+#              prompter can find and use it; ANSWER is typed into it.
 #   SEED_BOGUS "seed" to pre-pin a bogus CA for the realm (MITM)
+#   KEY_TYPE   certificate algorithm for setup.py (default: ec:P-256; see
+#              SUPPORTED_KEY_TYPES in setup.py for the full list, including
+#              mldsa44/mldsa65/mldsa87 for a post-quantum CA/KDC/client chain)
+#   ANSWER     line to type at the broker's tty prompt when MODE is
+#              interactive (e.g. "3" for the "1 day" grant preset); ignored
+#              otherwise
 run_scenario() {
-    local name="$1" title="$2" expected="$3" mode="$4" seed="${5:-}"
+    local name="$1" title="$2" expected="$3" mode="$4" seed="${5:-}" \
+          key_type="${6:-ec:P-256}" answer="${7:-}"
     local dir="$REPORTDIR/$name"
     mkdir -p "$dir"
 
@@ -99,8 +117,16 @@ run_scenario() {
             "$REALM" "$zeros" > "$state"
     fi
 
-    # Start the broker daemon.
-    "$BROKERD" "$sock" --auto "$mode" --state "$state" >"$broker_log" 2>&1 &
+    # Start the broker daemon. Interactive mode forces the client-tty
+    # prompter (rather than --auto) so the scenario actually exercises a
+    # human answering the prompt, not a pre-baked decision.
+    local broker_args=(--state "$state")
+    if [[ "$mode" == "interactive" ]]; then
+        broker_args+=(--ui tty)
+    else
+        broker_args+=(--auto "$mode")
+    fi
+    "$BROKERD" "$sock" "${broker_args[@]}" >"$broker_log" 2>&1 &
     local broker_pid=$!
     for _ in $(seq 1 40); do
         [[ -S "$sock" ]] && break
@@ -116,6 +142,7 @@ run_scenario() {
         --principal "$PRINCIPAL" \
         --plugin-so "$PLUGIN_SO" \
         --tofu-broker "$sock" \
+        --key-type "$key_type" \
         --env-file "$env_file" &
     local setup_pid=$!
     local ready=false
@@ -129,7 +156,20 @@ run_scenario() {
     if [[ "$ready" == true ]]; then
         # shellcheck disable=SC1090
         source "$env_file"
-        if KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME="$KRB5CCNAME" \
+        if [[ "$mode" == "interactive" ]]; then
+            # Give kinit a real pty so the broker's client-tty prompter has
+            # something to find via SO_PEERCRED + /proc/<pid>/fd/*, and
+            # "type" the answer into it -- plain </dev/null redirection (the
+            # non-interactive branch below) can't reach that code path at all.
+            if KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME="$KRB5CCNAME" \
+               python3 "$SCRIPT_DIR/pty_kinit.py" \
+                       --answer "$answer" --transcript "$dir/client-tty.log" \
+                       -- kinit -X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}" \
+                                "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" \
+               >"$dir/kinit.out" 2>&1; then
+                outcome="success"
+            fi
+        elif KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME="$KRB5CCNAME" \
            kinit -X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}" \
                  "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" </dev/null >"$dir/kinit.out" 2>&1; then
             outcome="success"
@@ -204,15 +244,40 @@ Client consults the broker; presented CA does not match the pin
 Broker denies (CA changed for a known realm); kinit fails closed
 EOF
             ;;
+        pq-happy-path)
+            cat <<'EOF'
+Client sends anonymous AS-REQ (WELLKNOWN/ANONYMOUS) for FAST armor
+KDC replies with its ML-DSA-65-signed certificate and issuing CA
+Client has no configured KDC-CA anchor; consults the broker (interactive)
+Broker approves and returns the post-quantum CA; client pins and validates
+the chain without assuming an ECDSA/RSA anchor
+Client sends the authenticated AS-REQ with its ML-DSA-65 client certificate
+KDC reply validates against the just-pinned post-quantum CA; kinit succeeds
+EOF
+            ;;
+        pq-tty-1day)
+            cat <<'EOF'
+Client sends anonymous AS-REQ (WELLKNOWN/ANONYMOUS) for FAST armor
+KDC replies with its ML-DSA-65-signed certificate and issuing CA
+Client has no configured KDC-CA anchor; consults the broker (interactive)
+Broker runs with --ui tty: it resolves kinit's own pid via SO_PEERCRED and
+prompts directly on kinit's controlling terminal, not the broker's own
+User answers "3" (1 day) at the prompt; broker pins the CA with that grant
+Client sends the authenticated AS-REQ with its ML-DSA-65 client certificate
+KDC reply validates against the newly-pinned post-quantum CA; kinit succeeds
+EOF
+            ;;
         *) echo "(no timeline)";;
     esac
 }
 
 # -- Run scenarios --
 
-run_scenario happy-path "Trust on first use (happy path)" success approve
-run_scenario denial     "Broker denies (fail closed)"     failure deny
-run_scenario mitm       "Changed CA detected (MITM)"      failure approve seed
+run_scenario happy-path    "Trust on first use (happy path)"                     success approve
+run_scenario denial        "Broker denies (fail closed)"                         failure deny
+run_scenario mitm          "Changed CA detected (MITM)"                          failure approve seed
+run_scenario pq-happy-path "Trust on first use with a post-quantum CA (ML-DSA-65)" success approve "" mldsa65
+run_scenario pq-tty-1day   "Post-quantum CA, confirmed on the client's tty (1 day)" success interactive "" mldsa65 3
 
 # -- Render the report --
 
