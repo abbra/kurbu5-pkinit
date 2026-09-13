@@ -10,7 +10,7 @@ each with:
     meta.env   key=value lines: name, title, expected, outcome, broker_mode,
                broker_decision, ca_fingerprint
     steps.txt  one timeline step per line (optional)
-    client-trace.log / kdc-trace.log / broker.log  (optional)
+    client-trace.log / kdc-trace.log / broker.log / client-tty.log  (optional)
 
 The `passed` flag is derived as (outcome == expected). The output JSON matches
 the shape consumed by tofu_report.py.
@@ -25,6 +25,7 @@ TRACE_FILES = [
     ("Client trace", "client-trace.log"),
     ("KDC trace", "kdc-trace.log"),
     ("Broker log", "broker.log"),
+    ("Client TTY session", "client-tty.log"),
 ]
 
 META_KEYS = [

@@ -16,12 +16,12 @@ The manifest is produced by tofu.sh and has the shape:
           "expected": "success" | "failure",
           "outcome":  "success" | "failure",
           "passed":   true | false,
-          "broker_mode": "approve" | "deny" | "seeded",
+          "broker_mode": "approve" | "deny" | "interactive" | "seeded",
           "broker_decision": "Trusted" | "Denied" | "Unknown" | "(unknown)",
           "ca_fingerprint": "ab:cd:...",
           "steps": ["...", "..."],
           "traces": {"Client trace": "<text>", "KDC trace": "<text>",
-                     "Broker log": "<text>"}
+                     "Broker log": "<text>", "Client TTY session": "<text>"}
         }
       ]
     }
