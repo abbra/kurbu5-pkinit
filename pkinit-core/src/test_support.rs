@@ -94,13 +94,23 @@ fn sign_cert(
     builder.sign(&signer).expect("sign cert")
 }
 
-/// Build a CA + KDC-leaf chain for `realm` (e.g. `"EXAMPLE.COM"`). The leaf's
-/// PKINIT SAN is `krbtgt/REALM@REALM`.
-pub fn build_kdc_chain(realm: &str) -> TestKdcChain {
-    let ca_key = generate_ec_key();
+fn generate_ml_dsa_key(variant: &std::ffi::CStr) -> Pkey<Private> {
+    let mut kgen = KeygenCtx::new(variant).unwrap();
+    kgen.generate().unwrap()
+}
+
+/// Build a CA + KDC-leaf chain for `realm` (e.g. `"EXAMPLE.COM"`), with the
+/// CA signed by `ca_key` (whatever its algorithm — `sign_cert`'s signer
+/// selection is keyed off the `Pkey`'s own type, not a caller-chosen digest).
+/// The leaf's PKINIT SAN is `krbtgt/REALM@REALM`.
+fn build_chain_with_ca_key(
+    realm: &str,
+    ca_key: Pkey<Private>,
+    ca_common_name: &str,
+) -> TestKdcChain {
     let ca_spki = ca_key.public_key_to_der().unwrap();
     let ca_name = NameBuilder::new()
-        .common_name("Test KDC CA")
+        .common_name(ca_common_name)
         .build()
         .unwrap();
     let ca_der = sign_cert(
@@ -147,4 +157,19 @@ pub fn build_kdc_chain(realm: &str) -> TestKdcChain {
         ca_der,
         kdc_leaf_der,
     }
+}
+
+/// Build a CA + KDC-leaf chain for `realm` (e.g. `"EXAMPLE.COM"`). The leaf's
+/// PKINIT SAN is `krbtgt/REALM@REALM`. The CA is ECDSA P-256.
+pub fn build_kdc_chain(realm: &str) -> TestKdcChain {
+    build_chain_with_ca_key(realm, generate_ec_key(), "Test KDC CA")
+}
+
+/// Same as [`build_kdc_chain`], but the CA is signed with a post-quantum
+/// ML-DSA-65 key (FIPS 204) instead of ECDSA. For exercising code that
+/// validates a certificate chain (trust-broker pinning, `pkinit-trust-ctl`
+/// export, ...) and must not assume the CA's signature algorithm — the KDC
+/// leaf itself stays EC, since only the issuer's algorithm is under test.
+pub fn build_pq_kdc_chain(realm: &str) -> TestKdcChain {
+    build_chain_with_ca_key(realm, generate_ml_dsa_key(c"ML-DSA-65"), "Test PQ KDC CA")
 }
