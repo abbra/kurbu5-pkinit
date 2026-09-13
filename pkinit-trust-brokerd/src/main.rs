@@ -12,13 +12,16 @@
 //!   --auto deny       Non-interactively deny unknown realms (CI/testing).
 //!   --state FILE      Persist pins to (and load them from) FILE.
 //!   --ui auto|gui|tty Prompting UI when a decision is needed (default: auto).
-//!                     "gui" shows a desktop notification with a button per
-//!                     grant duration (see `graphical`); "tty" always prompts
-//!                     on the terminal; "auto" uses the notification UI when
-//!                     a graphical session is detected ($DISPLAY or
-//!                     $WAYLAND_DISPLAY set) and falls back to the terminal
-//!                     otherwise, or if the notification daemon can't help.
-//!                     Ignored when --auto is given.
+//!                     "gui" shows a desktop notification with buttons for "1hr" and "trust always"
+//!                     grant durations (see `graphical`); "tty" prompts on the *connecting
+//!                     client's* controlling terminal, found via its PID from `SO_PEERCRED` (see
+//!                     `client_tty`) — this is what makes a plain console `kinit`, a root shell, or
+//!                     an SSH session work with no graphical session at all. "auto" uses the
+//!                     notification UI when a graphical session is detected ($DISPLAY or
+//!                     $WAYLAND_DISPLAY set) and the client's terminal otherwise, or if the
+//!                     notification daemon can't help. Either way, if nothing usable is found, the
+//!                     request is denied (fail closed) rather than left unanswered. Ignored when
+//!                     --auto is given.
 //!
 //! Autoactivation: when started with `LISTEN_PID`/`LISTEN_FDS` set (i.e. by
 //! systemd socket activation, per sd_listen_fds(3)), the daemon uses the
@@ -26,50 +29,18 @@
 //! SOCKET itself. See `contrib/systemd/` for reference unit files that wire
 //! this up as an on-demand per-user service.
 
+mod client_tty;
 mod graphical;
 
-use std::io::{BufRead, Write};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 
+use client_tty::ClientTtyPrompter;
 use graphical::NotifyPrompter;
 use pkinit_trust_brokerd::Broker;
-use pkinit_trust_brokerd::store::{
-    AutoPrompter, GRANT_PRESETS, GrantTtl, PinStore, Prompter, TrustRequest,
-};
+use pkinit_trust_brokerd::store::{AutoPrompter, PinStore, Prompter};
 use pkinit_trust_proto::default_socket_path;
 use zlink_smol::{Server, unix};
-
-/// Terminal prompter: shows the request and a numbered menu of grant
-/// durations. Any unrecognized input (including a bare "no" or empty line)
-/// denies, so the fail-closed default doesn't depend on parsing a "yes".
-struct TtyPrompter;
-impl Prompter for TtyPrompter {
-    fn confirm(&self, req: &TrustRequest<'_>) -> Option<GrantTtl> {
-        eprintln!(
-            "PKINIT: KDC realm {} (principal {}) presents an unrecognized CA:",
-            req.realm, req.kdc_principal
-        );
-        eprintln!("  Subject:    {}", req.ca_subject);
-        eprintln!("  SHA-256:    {}", req.fingerprint);
-        eprintln!("Trust this CA for {}?", req.realm);
-        for (i, (label, _)) in GRANT_PRESETS.iter().enumerate() {
-            eprintln!("  {}) {label}", i + 1);
-        }
-        eprintln!("  N) No, deny");
-        eprint!("Choice: ");
-        let _ = std::io::stderr().flush();
-
-        let mut line = String::new();
-        if std::io::stdin().lock().read_line(&mut line).is_err() {
-            return None;
-        }
-        let choice: usize = line.trim().parse().ok()?;
-        GRANT_PRESETS
-            .get(choice.checked_sub(1)?)
-            .map(|(_, ttl)| *ttl)
-    }
-}
 
 #[derive(Clone, Copy)]
 enum UiMode {
@@ -86,8 +57,8 @@ struct Args {
 
 /// Hints that a graphical session is likely available, so it's worth trying
 /// the notification UI at all. Not authoritative — the notification prompter
-/// still falls back to the terminal if this is wrong (e.g. no notification
-/// daemon actually running, or a headless X server).
+/// still falls back to the client's terminal if this is wrong (e.g. no
+/// notification daemon actually running, or a headless X server).
 fn graphical_session_hint() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some()
 }
@@ -123,14 +94,14 @@ fn systemd_activation_fd() -> Option<OwnedFd> {
 fn prompter_for(ui: UiMode) -> Box<dyn Prompter> {
     let notify = || {
         Box::new(NotifyPrompter {
-            fallback: Box::new(TtyPrompter),
+            fallback: Box::new(ClientTtyPrompter),
         }) as Box<dyn Prompter>
     };
     match ui {
-        UiMode::Tty => Box::new(TtyPrompter),
+        UiMode::Tty => Box::new(ClientTtyPrompter),
         UiMode::Gui => notify(),
         UiMode::Auto if graphical_session_hint() => notify(),
-        UiMode::Auto => Box::new(TtyPrompter),
+        UiMode::Auto => Box::new(ClientTtyPrompter),
     }
 }
 

@@ -144,10 +144,36 @@ By default (`--ui auto`) the daemon prompts via a desktop notification
 (`org.freedesktop.Notifications`) with a button for each grant duration plus
 Deny, when a graphical session is detected (`$DISPLAY`/`$WAYLAND_DISPLAY`);
 otherwise, or if the notification daemon can't render actions, it falls back
-to a terminal prompt. `--ui gui` and `--ui tty` force one or the other, and
-`--auto approve|deny` remains for non-interactive CI/testing use. See the
-module docs at the top of `pkinit-trust-brokerd/src/main.rs` for the full
-flag reference.
+to prompting on the *connecting client's* controlling terminal — found via
+the client's PID from `SO_PEERCRED` on the socket, not the broker's own tty
+(the broker may not have one at all; see autoactivation below). This is what
+makes TOFU consent work for a plain-console `kinit`, a root shell, or an SSH
+session with no graphical session anywhere in the picture. `--ui gui` and
+`--ui tty` force one or the other, and `--auto approve|deny` remains for
+non-interactive CI/testing use. If neither a notification nor a client
+terminal is usable, the request is denied rather than left unanswered. See
+the module docs at the top of `pkinit-trust-brokerd/src/main.rs` for the
+full flag reference.
+
+Since the prompt appears directly on the client's own terminal (not the
+broker's), a user running `kinit` against an unknown realm sees this — no
+separate broker window or log to go check:
+
+```
+$ kinit user@DEMO.EXAMPLE.COM
+PKINIT: KDC realm DEMO.EXAMPLE.COM (principal krbtgt/DEMO.EXAMPLE.COM@DEMO.EXAMPLE.COM) presents an unrecognized CA:
+  Subject:    CN=Test KDC CA
+  SHA-256:    9c278c2ade5694d542c6f4c15c682f88866016db240f95685bfe2889038b2d4c
+Trust this CA for DEMO.EXAMPLE.COM?
+  1) 15 minutes
+  2) 1 hour
+  3) 1 day
+  4) 1 week
+  5) forever
+  N) No, deny
+Choice: 2
+Password for user@DEMO.EXAMPLE.COM:
+```
 
 The daemon supports systemd socket activation (`sd_listen_fds(3)`), so it
 doesn't need to be started ahead of time: `contrib/systemd/` ships a
@@ -162,11 +188,9 @@ systemctl --user enable --now pkinit-trust-brokerd.socket
 ```
 
 The first connection (i.e. the first anonymous PKINIT exchange with an
-unknown KDC) starts the service on demand. Because a socket-activated
-service has no controlling terminal, its unit forces `--ui gui`: the
-notification prompter is the only prompting mode that can work there,
-falling back to a fail-closed deny (no stdin to read from) rather than a
-terminal prompt nobody can see if it can't reach a notification daemon.
+unknown KDC) starts the service on demand. The default `--ui auto` works
+fine even though the service itself has no controlling terminal, since the
+tty fallback prompts on the *client's* terminal rather than the broker's.
 
 ## Testing
 

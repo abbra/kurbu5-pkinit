@@ -9,6 +9,7 @@ pub mod store;
 
 use base64::Engine;
 use pkinit_trust_proto::{KdcTrustError, TrustReply};
+use zlink::connection::socket::FetchPeerCredentials;
 use zlink::service;
 
 use store::{PinStore, Prompter};
@@ -32,7 +33,10 @@ fn decode_all(items: &[String]) -> Option<Vec<Vec<u8>>> {
 }
 
 #[service(interface = "org.kurbu5.pkinit.KdcTrust")]
-impl Broker {
+impl<Sock> Broker
+where
+    Sock::ReadHalf: FetchPeerCredentials,
+{
     async fn request_trust(
         &mut self,
         realm: &str,
@@ -40,6 +44,7 @@ impl Broker {
         signer_cert: &str,
         presented_certs: Vec<String>,
         interactive: bool,
+        #[zlink(connection)] conn: &mut Connection<Sock>,
     ) -> Result<TrustReply, KdcTrustError<'_>> {
         // Trust is still keyed only on the realm; kdc_principal is passed
         // through to the prompter purely for display.
@@ -52,9 +57,19 @@ impl Broker {
             reason: "presented_certs not base64",
         })?;
 
+        // Best-effort: lets a prompter reach the connecting client's own
+        // controlling terminal. `None` (unsupported platform, or the peer
+        // already gone) just narrows which prompters can act.
+        let client_pid = conn
+            .peer_credentials()
+            .await
+            .ok()
+            .map(|creds| creds.process_id().as_raw_pid());
+
         let reply = self.store.decide(
             realm,
             kdc_principal,
+            client_pid,
             &signer,
             &presented,
             interactive,

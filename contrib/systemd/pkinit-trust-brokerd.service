@@ -5,14 +5,15 @@ After=pkinit-trust-brokerd.socket
 
 [Service]
 Type=simple
-# A socket-activated service has no controlling terminal (systemd gives it
-# no stdin), so --ui tty can never actually prompt here — only --ui gui
-# (a desktop notification) can. --ui auto would fall back to tty and fail
-# closed the same as a broken gui, but --ui gui makes the intent explicit
-# instead of relying on that fallback.
+# --ui auto (the default) is fine here even though this service itself has
+# no controlling terminal: "tty" mode prompts on the *connecting client's*
+# terminal (found via SO_PEERCRED), not this service's, so a plain-console
+# kinit, a root shell, or an SSH session all work with no graphical session
+# in the picture. --ui auto additionally tries a desktop notification first
+# when one is available.
 #
 # Adjust the binary path below to wherever pkinit-trust-brokerd is
 # installed (this project ships no packaging yet); %S/pins.json is under
 # $XDG_STATE_HOME thanks to StateDirectory=.
-ExecStart=%h/.cargo/bin/pkinit-trust-brokerd --ui gui --state %S/pins.json
+ExecStart=%h/.cargo/bin/pkinit-trust-brokerd --state %S/pins.json
 StateDirectory=pkinit-trust-brokerd

@@ -16,6 +16,7 @@ synta-certificate = { version = "0.3", features = ["std", "openssl"] }
 synta = "0.3"
 synta-x509-verification = "0.3"
 notify-rust = "4"
+libc = "0.2"
 
 [dev-dependencies]
 pkinit-core = { path = "../pkinit-core", features = ["test-util"] }
