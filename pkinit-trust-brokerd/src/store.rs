@@ -77,6 +77,12 @@ pub struct TrustRequest<'a> {
     pub ca_subject: &'a str,
     /// Lowercase hex SHA-256 of the CA DER.
     pub fingerprint: &'a str,
+    /// PID of the connecting client (the process that called the varlink
+    /// method), from `SO_PEERCRED` on the socket. `None` if peer credentials
+    /// couldn't be obtained (unsupported platform, or the lookup raced the
+    /// peer exiting). Lets a prompter reach the client's own controlling
+    /// terminal instead of (or in addition to) a desktop notification.
+    pub client_pid: Option<i32>,
 }
 
 /// A prompter decides interactive (unknown-realm) requests. Returning
@@ -217,10 +223,12 @@ impl PinStore {
     /// no valid CA certificate; the KDC signer is never used as a fallback.
     /// A pin whose time-boxed grant has lapsed is forgotten and treated as an
     /// unknown realm (re-prompting rather than trusting or denying blindly).
+    #[allow(clippy::too_many_arguments)]
     pub fn decide(
         &mut self,
         realm: &str,
         kdc_principal: &str,
+        client_pid: Option<i32>,
         signer_der: &[u8],
         presented_der: &[Vec<u8>],
         interactive: bool,
@@ -272,6 +280,7 @@ impl PinStore {
             kdc_principal,
             ca_subject: &ca_subject,
             fingerprint: &fp,
+            client_pid,
         };
         match prompter.confirm(&req) {
             Some(ttl) => {
@@ -353,7 +362,7 @@ mod tests {
     fn unknown_non_interactive_is_unknown() {
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
-        let r = store.decide("R", KDC_PRINCIPAL, &signer, &certs, false, &No);
+        let r = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, false, &No);
         assert_eq!(r.decision, Decision::Unknown);
     }
 
@@ -361,9 +370,9 @@ mod tests {
     fn unknown_interactive_yes_pins_then_trusts_again() {
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
-        let first = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
+        let first = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
         assert_eq!(first.decision, Decision::Trusted);
-        let second = store.decide("R", KDC_PRINCIPAL, &signer, &certs, false, &No);
+        let second = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, false, &No);
         assert_eq!(second.decision, Decision::Trusted);
     }
 
@@ -371,9 +380,9 @@ mod tests {
     fn changed_ca_is_denied() {
         let mut store = PinStore::in_memory();
         let (signer_a, certs_a) = alice();
-        let _ = store.decide("R", KDC_PRINCIPAL, &signer_a, &certs_a, true, &Yes);
+        let _ = store.decide("R", KDC_PRINCIPAL, None, &signer_a, &certs_a, true, &Yes);
         let (signer_b, certs_b) = bob();
-        let changed = store.decide("R", KDC_PRINCIPAL, &signer_b, &certs_b, true, &Yes);
+        let changed = store.decide("R", KDC_PRINCIPAL, None, &signer_b, &certs_b, true, &Yes);
         assert_eq!(changed.decision, Decision::Denied);
     }
 
@@ -381,14 +390,14 @@ mod tests {
     fn unknown_interactive_no_is_denied() {
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
-        let r = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &No);
+        let r = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &No);
         assert_eq!(r.decision, Decision::Denied);
     }
 
     #[test]
     fn empty_chain_is_denied() {
         let mut store = PinStore::in_memory();
-        let r = store.decide("R", KDC_PRINCIPAL, b"leaf", &[], true, &Yes);
+        let r = store.decide("R", KDC_PRINCIPAL, None, b"leaf", &[], true, &Yes);
         assert_eq!(r.decision, Decision::Denied);
     }
 
@@ -397,7 +406,7 @@ mod tests {
         let mut store = PinStore::in_memory();
         let (signer, _) = alice();
         let certs = vec![signer.clone()];
-        let r = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
+        let r = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
         assert_eq!(r.decision, Decision::Denied);
     }
 
@@ -408,6 +417,7 @@ mod tests {
             kdc_principal: KDC_PRINCIPAL,
             ca_subject: "CN=CA",
             fingerprint: "fp",
+            client_pid: None,
         };
         assert_eq!(
             AutoPrompter { approve: true }.confirm(&req),
@@ -420,8 +430,8 @@ mod tests {
     fn empty_chain_on_known_realm_denies() {
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
-        let _ = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
-        let empty = store.decide("R", KDC_PRINCIPAL, &signer, &[], true, &Yes);
+        let _ = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
+        let empty = store.decide("R", KDC_PRINCIPAL, None, &signer, &[], true, &Yes);
         assert_eq!(empty.decision, Decision::Denied);
     }
 
@@ -431,11 +441,11 @@ mod tests {
         let path = dir.path().join("pins.json");
         let (signer, certs) = alice();
         let mut store = PinStore::open(path.clone()).unwrap();
-        let first = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
+        let first = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
         assert_eq!(first.decision, Decision::Trusted);
         assert!(path.exists());
         let mut reloaded = PinStore::open(path).unwrap();
-        let again = reloaded.decide("R", KDC_PRINCIPAL, &signer, &certs, false, &No);
+        let again = reloaded.decide("R", KDC_PRINCIPAL, None, &signer, &certs, false, &No);
         assert_eq!(again.decision, Decision::Trusted);
     }
 
@@ -447,7 +457,7 @@ mod tests {
         std::fs::write(&path, seed).unwrap();
         let mut store = PinStore::open(path).unwrap();
         let (signer, certs) = alice();
-        let r = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
+        let r = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
         assert_eq!(r.decision, Decision::Denied);
     }
 
@@ -458,10 +468,18 @@ mod tests {
         // would either wrongly Trust or wrongly Deny-as-"CA changed").
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
-        let first = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &ExpiredOnArrival);
+        let first = store.decide(
+            "R",
+            KDC_PRINCIPAL,
+            None,
+            &signer,
+            &certs,
+            true,
+            &ExpiredOnArrival,
+        );
         assert_eq!(first.decision, Decision::Trusted);
 
-        let noninteractive = store.decide("R", KDC_PRINCIPAL, &signer, &certs, false, &No);
+        let noninteractive = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, false, &No);
         assert_eq!(noninteractive.decision, Decision::Unknown);
     }
 
@@ -469,8 +487,16 @@ mod tests {
     fn expired_grant_reprompts_and_can_be_retrusted() {
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
-        let _ = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &ExpiredOnArrival);
-        let again = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &Yes);
+        let _ = store.decide(
+            "R",
+            KDC_PRINCIPAL,
+            None,
+            &signer,
+            &certs,
+            true,
+            &ExpiredOnArrival,
+        );
+        let again = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
         assert_eq!(again.decision, Decision::Trusted);
     }
 
@@ -488,13 +514,13 @@ mod tests {
         }
 
         let mut store = PinStore::open(path.clone()).unwrap();
-        let first = store.decide("R", KDC_PRINCIPAL, &signer, &certs, true, &OneHour);
+        let first = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &OneHour);
         assert_eq!(first.decision, Decision::Trusted);
 
         // Not yet expired: a fresh store loaded from disk must still trust
         // it non-interactively.
         let mut reloaded = PinStore::open(path).unwrap();
-        let again = reloaded.decide("R", KDC_PRINCIPAL, &signer, &certs, false, &No);
+        let again = reloaded.decide("R", KDC_PRINCIPAL, None, &signer, &certs, false, &No);
         assert_eq!(again.decision, Decision::Trusted);
     }
 }

@@ -872,6 +872,7 @@ name = "pkinit-trust-brokerd"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "libc",
  "notify-rust",
  "pkinit-core",
  "pkinit-trust-proto",
