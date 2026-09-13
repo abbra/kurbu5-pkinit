@@ -347,6 +347,202 @@ job_tofu_test() {
     bash tests/system/pkinit/tofu.sh
 }
 
+print_interactive_help() {
+    cat <<EOF
+Usage: $(basename "$0") interactive [OPTIONS]
+
+Start an ephemeral Kerberos realm and KDC preconfigured for kurbu5-pkinit
+(plus, unless --no-tofu, the reference trust-broker daemon), then drop you
+into a shell inside it: run kinit/klist, inspect the generated certificates,
+watch a trust prompt arrive on your own terminal or as a desktop
+notification -- whatever you like. Exiting the shell (exit, Ctrl-D) tears
+everything down: KDC, broker, socket, temp files.
+
+--key-type and --pqc-min-algorithm are independent: one is about the
+certificates, the other about the key exchange. Setting one does not imply
+or affect the other -- pass --pqc-min-algorithm too if you want a fully
+post-quantum exchange, not just a post-quantum CA.
+
+Options:
+  --key-type TYPE          Certificate algorithm for the CA/KDC/client
+                            certs (default: ec:P-256) -- what signs them,
+                            unrelated to the key exchange used to get a
+                            ticket. See SUPPORTED_KEY_TYPES in
+                            tests/system/pkinit/setup.py: ec:P-256,
+                            ec:P-384, ec:P-521, rsa:2048, rsa:3072,
+                            rsa:4096, mldsa44, mldsa65, mldsa87.
+  --pqc-min-algorithm ALG  Minimum ML-KEM strength to require, switching
+                            the key exchange itself to the KEM path
+                            instead of classical DH/ECDH (default: unset,
+                            i.e. DH/ECDH regardless of --key-type). E.g.
+                            ML-KEM-768, ML-KEM-1024, ML-KEM-768-X25519.
+  --realm REALM             Kerberos realm name (default: PKINIT.TEST)
+  --principal NAME          Client principal name (default: user)
+  --no-tofu                 Skip the trust broker; give the client a static
+                            pkinit_anchors instead of trust-on-first-use
+  --ui MODE                 pkinit-trust-brokerd's --ui, when not --no-tofu
+                            (default: auto; auto|gui|tty -- see the module
+                            docs at the top of pkinit-trust-brokerd/src/main.rs)
+
+Examples:
+  $(basename "$0") interactive
+  $(basename "$0") interactive --key-type mldsa65
+                                    # post-quantum CA/KDC/client certs;
+                                    # key exchange is still classical DH
+  $(basename "$0") interactive --key-type mldsa65 --pqc-min-algorithm ML-KEM-768
+                                    # ... and a post-quantum key exchange too
+  $(basename "$0") interactive --no-tofu --key-type rsa:2048
+  $(basename "$0") interactive --ui tty
+EOF
+}
+
+run_interactive_playground() {
+    require_cargo || return 1
+    if [[ $has_krb5kdc -eq 0 || $has_openssl -eq 0 || $has_python3 -eq 0 ]]; then
+        fail "interactive requires krb5kdc, openssl, and python3 (install krb5-server, krb5-workstation, openssl, python3)"
+        return 1
+    fi
+
+    local key_type="ec:P-256" pqc_min="" realm="PKINIT.TEST" principal="user" \
+          tofu=1 ui="auto"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --key-type) key_type="$2"; shift 2 ;;
+            --pqc-min-algorithm) pqc_min="$2"; shift 2 ;;
+            --realm) realm="$2"; shift 2 ;;
+            --principal) principal="$2"; shift 2 ;;
+            --no-tofu) tofu=0; shift ;;
+            --ui) ui="$2"; shift 2 ;;
+            --help|-h) print_interactive_help; return 0 ;;
+            *) echo "interactive: unknown option: $1" >&2; print_interactive_help; return 2 ;;
+        esac
+    done
+
+    step "[interactive] building plugin + broker daemon + ctl (release)"
+    cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" \
+        -p kurbu5-pkinit -p pkinit-trust-brokerd -p pkinit-trust-ctl
+
+    local plugin_so="$REPO_ROOT/target/release/libkurbu5_pkinit.so"
+    local brokerd="$REPO_ROOT/target/release/pkinit-trust-brokerd"
+    local ctl="$REPO_ROOT/target/release/pkinit-trust-ctl"
+    [[ -f "$plugin_so" ]] || { fail "$plugin_so not built"; return 1; }
+    [[ -x "$brokerd" ]]  || { fail "$brokerd not built"; return 1; }
+
+    # Cleanup is called explicitly at every exit point below (rather than
+    # relying solely on a trap surviving to script exit): this function's
+    # `local`s would already be gone by the time a plain EXIT trap fires at
+    # the outer script's own exit, and referencing them then would be a
+    # hard error under `set -u`. INT/TERM are still trapped, since a signal
+    # delivered while this function is running (e.g. during KDC startup)
+    # fires while its locals are very much still in scope.
+    local work="" setup_pid="" broker_pid="" cleaned=0
+    playground_cleanup() {
+        [[ "$cleaned" == 1 ]] && return
+        cleaned=1
+        echo
+        echo "Tearing down playground…"
+        [[ -n "$setup_pid" ]] && { kill "$setup_pid" 2>/dev/null || true; wait "$setup_pid" 2>/dev/null || true; }
+        [[ -n "$broker_pid" ]] && { kill "$broker_pid" 2>/dev/null || true; wait "$broker_pid" 2>/dev/null || true; }
+        [[ -n "$work" ]] && rm -rf "$work"
+    }
+    trap playground_cleanup INT TERM
+
+    work="$(mktemp -d /tmp/pkinit-playground.XXXXXXXXXX)"
+    local testdir="$work/kdc"
+    local env_file="$testdir/env.sh"
+    local sock="$work/trust.sock"
+    local state="$work/trust.state.json"
+
+    local setup_args=(
+        --testdir "$testdir" --realm "$realm" --principal "$principal"
+        --plugin-so "$plugin_so" --key-type "$key_type" --env-file "$env_file"
+    )
+    [[ -n "$pqc_min" ]] && setup_args+=(--pqc-min-algorithm "$pqc_min")
+
+    if [[ "$tofu" == 1 ]]; then
+        # setsid: without this, the broker shares this script's process
+        # group, which stops being the terminal's foreground group the
+        # moment the interactive shell below claims it for a foreground
+        # command (kinit) -- the broker's read from that command's tty then
+        # either blocks the whole job until `fg` (in a real login session)
+        # or fails outright with EIO (in an already-orphaned one). A new
+        # session sidesteps that job-control interaction entirely, matching
+        # how the broker runs for real (systemd, its own session).
+        #
+        # setsid forks rather than exec'ing in place here, so $! is its own
+        # (short-lived) pid, not the broker's -- broker_pid is looked up
+        # below, once the broker is confirmed listening, via the socket
+        # path on its command line (unique to this invocation).
+        setsid "$brokerd" "$sock" --ui "$ui" --state "$state" &
+        for _ in $(seq 1 40); do
+            [[ -S "$sock" ]] && break
+            sleep 0.1
+        done
+        if [[ ! -S "$sock" ]]; then
+            playground_cleanup
+            fail "pkinit-trust-brokerd did not start listening in time"
+            return 1
+        fi
+        broker_pid="$(pgrep -f "$sock" | head -1)"
+        if [[ -z "$broker_pid" ]]; then
+            playground_cleanup
+            fail "pkinit-trust-brokerd is listening but its process could not be found"
+            return 1
+        fi
+        setup_args+=(--tofu-broker "$sock")
+    fi
+
+    python3 "$REPO_ROOT/tests/system/pkinit/setup.py" "${setup_args[@]}" &
+    setup_pid=$!
+    local ready=false
+    for _ in $(seq 1 60); do
+        [[ -f "$env_file" ]] && { ready=true; break; }
+        kill -0 "$setup_pid" 2>/dev/null || break
+        sleep 0.5
+    done
+    if [[ "$ready" != true ]]; then
+        cat "$testdir/kdc.log" 2>/dev/null || true
+        playground_cleanup
+        fail "KDC did not become ready; see the log above"
+        return 1
+    fi
+
+    # shellcheck disable=SC1090
+    source "$env_file"
+
+    echo
+    echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}kurbu5-pkinit playground ready${NC}"
+    echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "  realm:          $realm"
+    echo "  principal:      $principal@$realm"
+    echo "  cert algorithm: $key_type (CA/KDC/client cert signing -- independent of key exchange below)"
+    if [[ -n "$pqc_min" ]]; then
+        echo "  key exchange:   $pqc_min (post-quantum)"
+    else
+        echo "  key exchange:   DH/ECDH (classical -- pass --pqc-min-algorithm for ML-KEM instead)"
+    fi
+    if [[ "$tofu" == 1 ]]; then
+        echo "  trust:          TOFU via broker at $sock (--ui $ui)"
+    else
+        echo "  trust:          static pkinit_anchors (no broker)"
+    fi
+    echo
+    echo "  Try:"
+    echo "    kinit -X X509_user_identity=FILE:\$PKINIT_CLIENT_CERT,\$PKINIT_CLIENT_KEY $principal@$realm"
+    echo "    klist"
+    [[ "$tofu" == 1 && -x "$ctl" ]] && echo "    $ctl --socket $sock list"
+    echo
+    echo "  Exit this shell (exit or Ctrl-D) to tear the playground down."
+    echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo
+
+    PS1="[pkinit-playground] \W \$ " "${SHELL:-bash}" -i || true
+
+    playground_cleanup
+    trap - INT TERM
+}
+
 # ── Dispatch table ───────────────────────────────────────────────────────────
 dispatch_job() {
     case "$1" in
@@ -417,6 +613,10 @@ Run CI jobs locally, mirroring .github/workflows/ci.yml.
 
 Special targets:
   all          Run every job in order
+  interactive  Start an ephemeral KDC (and, unless --no-tofu, the trust
+               broker), then drop you into a shell to play with them;
+               torn down when the shell exits. Run
+               '$(basename "$0") interactive --help' for its own options.
 
 Available jobs:
 $(printf '  %s\n' "${ALL_JOBS[@]}")
@@ -459,6 +659,12 @@ fi
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     print_help
     exit 0
+fi
+
+if [[ "${1:-}" == "interactive" ]]; then
+    shift
+    run_interactive_playground "$@"
+    exit $?
 fi
 
 # Determine which jobs to run; 'all' expands to every job in order.
