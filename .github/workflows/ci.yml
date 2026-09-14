@@ -210,8 +210,11 @@ jobs:
 
   # ── TOFU test ──────────────────────────────────────────────────────────────
   # Exercises the KDC-CA trust-on-first-use flow (anonymous probe → broker
-  # approval/denial → pin) across happy-path, fail-closed, and MITM scenarios,
-  # then uploads an HTML report visualizing each scenario.
+  # approval/denial → pin) across happy-path, fail-closed, and MITM scenarios.
+  # tofu.sh writes its report directly to GITHUB_STEP_SUMMARY (an env var the
+  # runner already sets for every step), so it's visible on this run's Summary
+  # tab without downloading anything; the uploaded HTML artifact remains for
+  # the fully-styled report and untruncated traces.
   tofu-test:
     name: TOFU Test
     needs: [build]
