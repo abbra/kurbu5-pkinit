@@ -3,6 +3,9 @@
 #
 # Exercises the client TOFU flow end to end against a kurbu5-pkinit KDC and the
 # reference pkinit-trust-brokerd, then renders an HTML report of the scenarios.
+# Under GitHub Actions (GITHUB_STEP_SUMMARY set), the same manifest is also
+# rendered straight into the job summary, so the report is visible on the
+# run's Summary tab without downloading and unpacking the HTML artifact.
 #
 # Scenarios (each fully independent -- own KDC, own broker, own socket/state):
 #   happy-path  broker auto-approves: the anonymous exchange pins the KDC CA and
@@ -284,6 +287,14 @@ run_scenario pq-tty-1day   "Post-quantum CA, confirmed on the client's tty (1 da
 MANIFEST="$WORK/manifest.json"
 python3 "$SCRIPT_DIR/tofu_manifest.py" "$REPORTDIR" "$REALM" "$MANIFEST"
 python3 "$SCRIPT_DIR/tofu_report.py" "$MANIFEST" "$REPORT_HTML"
+
+# Also render straight into the GitHub Actions job summary, when running as
+# a workflow step (GITHUB_STEP_SUMMARY is unset locally): the uploaded HTML
+# artifact is always zipped, so seeing it means downloading and unpacking --
+# this puts the same content right on the run's Summary tab instead.
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    python3 "$SCRIPT_DIR/tofu_summary.py" "$MANIFEST" >> "$GITHUB_STEP_SUMMARY"
+fi
 
 echo
 echo "TOFU report: $REPORT_HTML"
