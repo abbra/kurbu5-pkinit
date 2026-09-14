@@ -44,21 +44,21 @@ jobs:
     steps:
       - name: Install native dependencies
         run: dnf install -y $DNF_PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Restore cargo registry cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/registry
           key: cargo-registry-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: cargo-registry-v1-
       - name: Restore cargo git cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/git
           key: cargo-git-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: cargo-git-v1-
       - name: Restore debug build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/debug/.fingerprint
@@ -81,7 +81,7 @@ jobs:
     steps:
       - name: Install native dependencies
         run: dnf install -y $DNF_PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check formatting
         run: ./contrib/ci/local-ci.sh --no-deps fmt
 
@@ -96,7 +96,7 @@ jobs:
     steps:
       - name: Install native dependencies
         run: dnf install -y $DNF_PACKAGES yamllint
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate GitHub Actions workflow files
         run: ./contrib/ci/local-ci.sh --no-deps lint-workflows
 
@@ -109,15 +109,15 @@ jobs:
     steps:
       - name: Install native dependencies
         run: dnf install -y $DNF_PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Restore cargo registry cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/registry
           key: cargo-registry-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: cargo-registry-v1-
       - name: Restore debug build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/debug/.fingerprint
@@ -138,15 +138,15 @@ jobs:
     steps:
       - name: Install native dependencies
         run: dnf install -y $DNF_PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Restore cargo registry cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/registry
           key: cargo-registry-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: cargo-registry-v1-
       - name: Restore debug build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/debug/.fingerprint
@@ -167,15 +167,15 @@ jobs:
     steps:
       - name: Install native dependencies
         run: dnf install -y $DNF_PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Restore cargo registry cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/registry
           key: cargo-registry-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: cargo-registry-v1-
       - name: Restore build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/debug/.fingerprint
@@ -198,9 +198,9 @@ jobs:
     steps:
       - name: Install native dependencies
         run: dnf install -y $DNF_PACKAGES $SYSTEM_TEST_PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Restore cargo registry cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/registry
           key: cargo-registry-v1-${{ hashFiles('**/Cargo.lock') }}
@@ -223,9 +223,9 @@ jobs:
     steps:
       - name: Install native dependencies
         run: dnf install -y $DNF_PACKAGES $SYSTEM_TEST_PACKAGES
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Restore cargo registry cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/registry
           key: cargo-registry-v1-${{ hashFiles('**/Cargo.lock') }}
@@ -234,7 +234,7 @@ jobs:
         run: ./contrib/ci/local-ci.sh --no-deps tofu-test
       - name: Upload TOFU HTML report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pkinit-tofu-report
           path: pkinit-tofu-report.html
