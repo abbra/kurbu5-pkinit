@@ -10,7 +10,7 @@ synta = { version = "0.3", features = ["derive"] }
 synta-krb5 = "0.3"
 synta-certificate = { version = "0.3", features = ["std", "openssl"] }
 synta-x509-verification = "0.3"
-native-ossl = "0.2"
+native-ossl = "0.3"
 thiserror = "2"
 tracing = "0.1"
 
