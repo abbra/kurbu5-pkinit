@@ -73,7 +73,8 @@ where
             self.prompter.as_ref(),
         );
         eprintln!(
-            "[broker] realm={realm} interactive={interactive} decision={:?}",
+            "[broker] realm={} interactive={interactive} decision={:?}",
+            store::sanitize_for_display(realm),
             reply.decision
         );
         Ok(reply)

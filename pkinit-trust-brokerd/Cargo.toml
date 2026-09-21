@@ -17,6 +17,7 @@ synta = "0.3"
 synta-x509-verification = "0.3"
 notify-rust = "4"
 libc = "0.2"
+unicode-general-category = "1.1.0"
 
 [dev-dependencies]
 pkinit-core = { path = "../pkinit-core", features = ["test-util"] }

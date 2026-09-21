@@ -76,6 +76,16 @@ impl Prompter for NotifyPrompter {
     }
 }
 
+/// Escapes the subset of markup some `org.freedesktop.Notifications` servers
+/// interpret in notification body/summary text. `req.ca_subject`/`req.realm`
+/// come from the unauthenticated KDC side of a TOFU exchange, so a malicious
+/// KDC could otherwise inject e.g. `<a href=...>` into the trust prompt.
+fn escape_markup(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 impl NotifyPrompter {
     fn ask(&self, req: &TrustRequest<'_>) -> notify_rust::error::Result<Option<GrantTtl>> {
         let caps = notify_rust::get_capabilities()?;
@@ -83,14 +93,18 @@ impl NotifyPrompter {
             return Err("notification server does not support actions".into());
         }
 
-        let body = format!("{}\nSHA-256: {}", req.ca_subject, req.fingerprint);
+        let body = format!(
+            "{}\nSHA-256: {}",
+            escape_markup(req.ca_subject),
+            req.fingerprint
+        );
 
         let mut notification = Notification::new();
         notification
             .appname("pkinit-trust-brokerd")
             .summary(&format!(
                 "Trust new certificate authority for {}?",
-                req.realm
+                escape_markup(req.realm)
             ))
             .body(&body)
             .icon("dialog-password")
@@ -116,5 +130,20 @@ impl NotifyPrompter {
             // fails closed.
         });
         Ok(decision)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_markup_escapes_html_entities() {
+        // `&` must be escaped first so the entities it introduces
+        // (`&lt;`/`&gt;`) aren't themselves re-escaped afterwards.
+        assert_eq!(
+            escape_markup("<a href=\"x\">&amp;</a>"),
+            "&lt;a href=\"x\"&gt;&amp;amp;&lt;/a&gt;"
+        );
     }
 }
