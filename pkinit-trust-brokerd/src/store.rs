@@ -13,6 +13,7 @@ use synta_certificate::DataHasher;
 use synta_x509_verification::{
     ExtensionPolicy, OwnedStore, PolicyDefinition, ValidationProfile, VerificationCertificate,
 };
+use unicode_general_category::{GeneralCategory, get_general_category};
 
 use pkinit_trust_proto::{Decision, TrustReply, TrustedRealm};
 
@@ -110,6 +111,26 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// True for control characters (C0, DEL, C1) and any Unicode "Format" (`Cf`)
+/// character — bidi overrides, zero-width/invisible joiners, deprecated
+/// shaping controls, interlinear annotations, etc. — that can be used to
+/// rewrite or hide displayed text without being a "control" character under
+/// `char::is_control()`. Categorizing by `Cf` rather than hand-picking
+/// ranges avoids missing individual format characters.
+fn is_unsafe_for_display(c: char) -> bool {
+    c.is_control() || get_general_category(c) == GeneralCategory::Format
+}
+
+/// Strips control and Unicode format characters from KDC-supplied text
+/// before it reaches a trust prompt. `realm`, `kdc_principal`, and the CA
+/// subject DN all originate from the unauthenticated side of a TOFU
+/// exchange, so a malicious KDC could otherwise embed ANSI/OSC escape
+/// sequences or bidi overrides to rewrite terminal output or hide the real
+/// prompt from the user.
+pub(crate) fn sanitize_for_display(s: &str) -> String {
+    s.chars().filter(|c| !is_unsafe_for_display(*c)).collect()
 }
 
 /// Best-effort human-readable Subject DN of a DER certificate, for display in
@@ -274,10 +295,14 @@ impl PinStore {
             };
         }
 
-        let ca_subject = subject_dn(ca).unwrap_or_else(|| format!("(CA for {realm})"));
+        let realm_display = sanitize_for_display(realm);
+        let kdc_principal_display = sanitize_for_display(kdc_principal);
+        let ca_subject = sanitize_for_display(
+            &subject_dn(ca).unwrap_or_else(|| format!("(CA for {realm_display})")),
+        );
         let req = TrustRequest {
-            realm,
-            kdc_principal,
+            realm: &realm_display,
+            kdc_principal: &kdc_principal_display,
             ca_subject: &ca_subject,
             fingerprint: &fp,
             client_pid,
@@ -617,6 +642,40 @@ mod tests {
 
         let second = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, false, &No);
         assert_eq!(second.decision, Decision::Trusted);
+    }
+
+    #[test]
+    fn sanitize_for_display_strips_control_characters() {
+        // ESC (ANSI/OSC sequences), C1 controls, and DEL must all be
+        // dropped, neutralizing escape sequences by removing the
+        // introducer byte; ordinary printable text (including non-ASCII)
+        // survives untouched.
+        assert_eq!(
+            sanitize_for_display("R\x1bealm\u{9b}\u{7f} \u{e9}cole"),
+            "Realm école"
+        );
+    }
+
+    #[test]
+    fn sanitize_for_display_strips_unicode_format_characters() {
+        // Bidi overrides and zero-width characters aren't "control"
+        // characters under Unicode, but can still be used to visually
+        // reorder or hide text in a terminal or GUI trust prompt.
+        assert_eq!(
+            sanitize_for_display("R\u{202E}ealm\u{200B}\u{FEFF}"),
+            "Realm"
+        );
+    }
+
+    #[test]
+    fn sanitize_for_display_strips_less_common_format_characters() {
+        // U+061C, U+180E, U+206A-U+206F, and U+FFF9-U+FFFB are all Unicode
+        // category Cf, but sit outside the ranges a hand-picked list would
+        // typically include; categorizing by Cf catches them regardless.
+        assert_eq!(
+            sanitize_for_display("R\u{061C}e\u{180E}a\u{206A}l\u{FFF9}m\u{FFFB}"),
+            "Realm"
+        );
     }
 
     #[test]
