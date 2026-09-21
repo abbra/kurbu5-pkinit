@@ -1,3 +1,4 @@
 [workspace]
 members = ["pkinit-core", "kurbu5-pkinit", "pkinit-trust-proto", "pkinit-trust-brokerd", "pkinit-trust-ctl"]
 resolver = "3"
+

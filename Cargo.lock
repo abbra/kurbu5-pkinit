@@ -682,9 +682,9 @@ dependencies = [
 
 [[package]]
 name = "native-ossl"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a8b64ceeb2c5b5b1f935dacc4f448816ccbec4e8900d50285e41162aafebe7b"
+checksum = "faaa8ea3dae32f967ef741950b050fa2ea7ddb29c2ba3ee26547d7e57c9efa4c"
 dependencies = [
  "log",
  "native-ossl-sys",
@@ -692,9 +692,9 @@ dependencies = [
 
 [[package]]
 name = "native-ossl-sys"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5d666d7efd6c531c4f5d83ac650cca66b7797b14bbe3bf19e8caf6ac6112ab3"
+checksum = "84b37c6b8e2accac4d8a086a554394ac317273466feba8a84101e8127c6ba956"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1218,9 +1218,9 @@ dependencies = [
 
 [[package]]
 name = "synta"
-version = "0.3.3"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "333ee6e5dd50b4cbe13f56f542be382e39263766850102ba7e26ec6cb2db1cb8"
+checksum = "a06e1ff186274edc70deb8c3b60e65b7ce3acffeb5bc7e1bfa66482fd5a0159b"
 dependencies = [
  "smallvec",
  "synta-derive",
@@ -1228,9 +1228,9 @@ dependencies = [
 
 [[package]]
 name = "synta-certificate"
-version = "0.3.3"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f35b3177075f64f7844f234d04a48541b699651202f111759847e703a1655ff"
+checksum = "45155086c045bead8f93171ff5760a20668f4ae32a947faf145665145ecc2458"
 dependencies = [
  "cryptoki",
  "log",
@@ -1242,15 +1242,15 @@ dependencies = [
 
 [[package]]
 name = "synta-codegen"
-version = "0.3.3"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e6b5ffecbea49604c990b022c7bd92241fc15e98e354c2894e1057606a0abbf"
+checksum = "9f6779cd418be61af9e56ead1c188ede697197b693a12a4bdea1ba13df4c574e"
 
 [[package]]
 name = "synta-derive"
-version = "0.3.3"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afd4e3a5de10282e20ad53a8344b9b7baf5d957dcc2598a9070a1284970fced8"
+checksum = "cb7d80d835d8cee17bbf34c41b95f3783faf8d23dc7eddf86fa7b0b10ebb8c1e"
 dependencies = [
  "proc-macro2",
  "quote",
