@@ -2,9 +2,6 @@
 //! and its pin store. The `pkinit-trust-brokerd` binary is a thin wrapper; the
 //! service lives here so integration tests can drive it directly.
 
-// The zlink service/derive macros emit `::zlink` paths; alias the runtime crate.
-extern crate zlink_smol as zlink;
-
 pub mod store;
 
 use base64::Engine;

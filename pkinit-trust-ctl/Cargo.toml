@@ -7,7 +7,7 @@ description = "Reference client for pkinit-trust-brokerd: lists trusted realms a
 
 [dependencies]
 pkinit-trust-proto = { path = "../pkinit-trust-proto" }
-zlink-smol = "0.4"
+zlink = { version = "0.7", features = ["smol"] }
 smol = "2"
 base64 = "0.22"
 

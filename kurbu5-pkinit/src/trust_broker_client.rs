@@ -35,7 +35,7 @@ impl KdcCaTrustBroker for VarlinkTrustBroker {
 
         let reply = smol::block_on(async {
             let call = async {
-                let mut conn = zlink_smol::unix::connect(&self.socket_path)
+                let mut conn = zlink::smol::unix::connect(&self.socket_path)
                     .await
                     .map_err(|e| PkinitError::Config(format!("trust broker connect: {e}")))?;
                 conn.request_trust(

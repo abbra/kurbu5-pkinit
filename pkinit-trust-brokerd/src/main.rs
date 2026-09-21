@@ -40,7 +40,8 @@ use graphical::NotifyPrompter;
 use pkinit_trust_brokerd::Broker;
 use pkinit_trust_brokerd::store::{AutoPrompter, PinStore, Prompter};
 use pkinit_trust_proto::default_socket_path;
-use zlink_smol::{Server, unix};
+use zlink::Server;
+use zlink::smol::unix;
 
 #[derive(Clone, Copy)]
 enum UiMode {

@@ -17,6 +17,6 @@ synta = "0.3"
 synta-krb5 = { version = "0.3", features = ["derive"] }
 libc = "0.2"
 native-ossl = "0.2"
-zlink-smol = "0.4"
+zlink = { version = "0.7", features = ["smol"] }
 smol = "2"
 base64 = "0.22"
