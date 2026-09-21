@@ -109,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     smol::block_on(async {
-        let mut conn = zlink_smol::unix::connect(&args.socket)
+        let mut conn = zlink::smol::unix::connect(&args.socket)
             .await
             .map_err(|e| format!("connecting to {}: {e}", args.socket.display()))?;
         let store = conn

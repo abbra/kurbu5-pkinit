@@ -2,10 +2,6 @@
 //! asks the broker whether a KDC's presented CA bundle should be trusted.
 //! Certificates travel as base64-encoded DER (varlink payloads are JSON text).
 
-// The zlink derive/attribute macros emit `::zlink` paths; alias the chosen
-// runtime crate so that resolves without depending on the umbrella `zlink` crate.
-extern crate zlink_smol as zlink;
-
 use serde::{Deserialize, Serialize};
 use zlink::{ReplyError, introspect, proxy};
 
@@ -25,7 +21,7 @@ pub fn default_socket_path() -> std::path::PathBuf {
 }
 
 /// The broker's decision.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, introspect::Type)]
 pub enum Decision {
     Trusted,
     Denied,
@@ -33,7 +29,7 @@ pub enum Decision {
 }
 
 /// Reply to `RequestTrust`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, introspect::Type)]
 pub struct TrustReply {
     pub decision: Decision,
     /// Base64 DER anchors to validate against; present iff `decision == Trusted`.
@@ -47,7 +43,7 @@ pub struct TrustReply {
 /// `ListTrustedRealms`. Excludes pins whose time-boxed grant has lapsed —
 /// those are no longer trusted, so callers building permanent config from
 /// this list never pick up a stale grant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, introspect::Type)]
 pub struct TrustedRealm {
     pub realm: String,
     /// Base64 DER of the pinned CA certificate.
@@ -60,7 +56,7 @@ pub struct TrustedRealm {
 }
 
 /// Reply to `ListTrustedRealms`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, introspect::Type)]
 pub struct TrustStoreReply {
     pub realms: Vec<TrustedRealm>,
 }

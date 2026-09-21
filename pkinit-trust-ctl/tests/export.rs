@@ -9,7 +9,8 @@ use pkinit_core::test_support::{build_kdc_chain, build_pq_kdc_chain};
 use pkinit_trust_brokerd::Broker;
 use pkinit_trust_brokerd::store::{GrantTtl, PinStore, Prompter, TrustRequest};
 use pkinit_trust_proto::KdcTrustProxy;
-use zlink_smol::{Server, unix};
+use zlink::Server;
+use zlink::smol::unix;
 
 struct AlwaysYes;
 impl Prompter for AlwaysYes {
