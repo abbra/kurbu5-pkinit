@@ -40,7 +40,9 @@ impl PkinitIdentity {
 
         Ok(PkinitIdentity {
             cert_der,
-            key_pkcs8_der: key_der,
+            signing_key: Some(
+                synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(key_der),
+            ),
             chain,
         })
     }
@@ -76,7 +78,9 @@ impl PkinitIdentity {
 
         Ok(PkinitIdentity {
             cert_der,
-            key_pkcs8_der: key_der,
+            signing_key: Some(
+                synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(key_der),
+            ),
             chain,
         })
     }
@@ -105,19 +109,52 @@ impl PkinitIdentity {
 
         Ok(PkinitIdentity {
             cert_der,
-            key_pkcs8_der: key_der,
+            signing_key: Some(
+                synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(key_der),
+            ),
             chain,
         })
     }
 
-    fn load_pkcs11(_uri: &str) -> Result<Self, PkinitError> {
-        // PKCS#11 key material stays on the hardware token and cannot be
-        // exported as PKCS#8 DER.  The plugin adapter (kurbu5-pkinit) handles
-        // PKCS#11 identities by keeping a BackendPrivateKey object for signing
-        // and loading the certificate separately from the token.
-        Err(PkinitError::Unsupported(
-            "PKCS#11 identity loading requires the plugin adapter".into(),
-        ))
+    fn load_pkcs11(uri: &str) -> Result<Self, PkinitError> {
+        use synta_certificate::crypto::BackendPrivateKey;
+
+        // The private key stays on the hardware token; we hold a live,
+        // token-backed handle for signing.  It is never exported to PKCS#8.
+        let signing_key = BackendPrivateKey::from_pkcs11_uri(uri).map_err(|e| {
+            PkinitError::IdentityLoadFailed(format!(
+                "loading PKCS#11 key from {}: {e}",
+                redact_pkcs11_uri(uri)
+            ))
+        })?;
+
+        // Read the certificate (and any additional chain certificates) from the
+        // same token through the pkcs11-provider / OSSL_STORE path.  A URI that
+        // selects the private key (`type=private`) would otherwise exclude the
+        // certificate objects, so query with `type=cert`.
+        let cert_uri = pkcs11_cert_uri(uri);
+        let mut certs = synta_certificate::load_certs_from_pkcs11_uri(&cert_uri)
+            .map_err(|e| {
+                PkinitError::IdentityLoadFailed(format!(
+                    "loading PKCS#11 certificate from {}: {e}",
+                    redact_pkcs11_uri(&cert_uri)
+                ))
+            })?
+            .into_iter();
+
+        let cert_der = certs.next().ok_or_else(|| {
+            PkinitError::IdentityLoadFailed(format!(
+                "PKCS#11 token exposes no certificate for {}",
+                redact_pkcs11_uri(uri)
+            ))
+        })?;
+        let chain = certs.collect();
+
+        Ok(PkinitIdentity {
+            cert_der,
+            signing_key: Some(signing_key),
+            chain,
+        })
     }
 
     fn load_env(cert_var: &str, key_var: &str) -> Result<Self, PkinitError> {
@@ -173,10 +210,47 @@ fn extract_private_key(blocks: &[(String, Vec<u8>)]) -> Result<Vec<u8>, PkinitEr
         .ok_or_else(|| PkinitError::IdentityLoadFailed("no private key found".into()))
 }
 
+/// Derive a certificate-selecting PKCS#11 URI from an identity URI.
+///
+/// An identity URI often pins the private key with `type=private`; reusing it
+/// verbatim to read certificates would match nothing.  This strips any existing
+/// `type=` path attribute and appends `type=cert`, preserving every other path
+/// attribute (`token`, `object`, `id`, `module-path`, ...) and the query
+/// component (which carries `pin-value`).
+/// Strip the query component from a PKCS#11 URI before it appears in any
+/// user-facing message.  The query may carry `pin-value=<PIN>`, which must
+/// never be logged.
+fn redact_pkcs11_uri(uri: &str) -> &str {
+    uri.split_once('?').map_or(uri, |(path, _)| path)
+}
+
+fn pkcs11_cert_uri(uri: &str) -> String {
+    let (path, query) = match uri.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (uri, None),
+    };
+
+    let mut components: Vec<&str> = path
+        .split(';')
+        .filter(|c| !c.starts_with("type="))
+        .collect();
+    // The first component is the `pkcs11:` scheme (plus any leading attribute);
+    // append the cert type selector as a new attribute.
+    let type_cert = "type=cert";
+    components.push(type_cert);
+    let mut out = components.join(";");
+    if let Some(q) = query {
+        out.push('?');
+        out.push_str(q);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use synta::{Integer, UtcTime};
+    use synta_certificate::crypto::PrivateKey;
     use synta_certificate::{
         CertificateBuilder, NameBuilder, OpensslPkcs12Encryptor, Pkcs12Builder, Time,
     };
@@ -239,7 +313,20 @@ mod tests {
         };
         let identity = PkinitIdentity::load(&source).unwrap();
         assert_eq!(identity.cert_der, cert_der);
-        assert_eq!(identity.key_pkcs8_der, pkcs8_der);
+        // The private key is no longer stored as raw PKCS#8; confirm the loaded
+        // signing key matches the expected key by comparing public keys.
+        let got_spki = identity
+            .signing_key
+            .as_ref()
+            .unwrap()
+            .public_key_spki_der()
+            .unwrap();
+        let want_spki = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+            pkcs8_der.clone(),
+        )
+        .public_key_spki_der()
+        .unwrap();
+        assert_eq!(got_spki, want_spki);
         assert!(identity.chain.is_empty());
     }
 
@@ -259,7 +346,20 @@ mod tests {
         };
         let identity = PkinitIdentity::load(&source).unwrap();
         assert_eq!(identity.cert_der, cert_der);
-        assert_eq!(identity.key_pkcs8_der, pkcs8_der);
+        // The private key is no longer stored as raw PKCS#8; confirm the loaded
+        // signing key matches the expected key by comparing public keys.
+        let got_spki = identity
+            .signing_key
+            .as_ref()
+            .unwrap()
+            .public_key_spki_der()
+            .unwrap();
+        let want_spki = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+            pkcs8_der.clone(),
+        )
+        .public_key_spki_der()
+        .unwrap();
+        assert_eq!(got_spki, want_spki);
     }
 
     #[test]
@@ -270,6 +370,42 @@ mod tests {
             key_path: dir.path().join("key.pem"),
         };
         assert!(PkinitIdentity::load(&source).is_err());
+    }
+
+    #[test]
+    fn pkcs11_cert_uri_replaces_type_private_with_cert() {
+        assert_eq!(
+            pkcs11_cert_uri("pkcs11:token=MyToken;object=cakey;type=private"),
+            "pkcs11:token=MyToken;object=cakey;type=cert"
+        );
+    }
+
+    #[test]
+    fn pkcs11_cert_uri_appends_type_when_absent() {
+        assert_eq!(
+            pkcs11_cert_uri("pkcs11:token=MyToken;object=cakey"),
+            "pkcs11:token=MyToken;object=cakey;type=cert"
+        );
+    }
+
+    #[test]
+    fn redact_pkcs11_uri_strips_pin_value() {
+        assert_eq!(
+            redact_pkcs11_uri("pkcs11:token=MyToken;object=cakey?pin-value=1234"),
+            "pkcs11:token=MyToken;object=cakey"
+        );
+        assert_eq!(
+            redact_pkcs11_uri("pkcs11:token=MyToken;object=cakey"),
+            "pkcs11:token=MyToken;object=cakey"
+        );
+    }
+
+    #[test]
+    fn pkcs11_cert_uri_preserves_pin_query() {
+        assert_eq!(
+            pkcs11_cert_uri("pkcs11:token=MyToken;object=cakey;type=private?pin-value=1234"),
+            "pkcs11:token=MyToken;object=cakey;type=cert?pin-value=1234"
+        );
     }
 
     #[test]
@@ -347,7 +483,20 @@ mod tests {
 
         let identity = PkinitIdentity::load_pkcs12(&p12_path, TEST_PKCS12_PASSWORD).unwrap();
         assert_eq!(identity.cert_der, cert_der);
-        assert_eq!(identity.key_pkcs8_der, pkcs8_der);
+        // The private key is no longer stored as raw PKCS#8; confirm the loaded
+        // signing key matches the expected key by comparing public keys.
+        let got_spki = identity
+            .signing_key
+            .as_ref()
+            .unwrap()
+            .public_key_spki_der()
+            .unwrap();
+        let want_spki = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+            pkcs8_der.clone(),
+        )
+        .public_key_spki_der()
+        .unwrap();
+        assert_eq!(got_spki, want_spki);
     }
 
     #[test]

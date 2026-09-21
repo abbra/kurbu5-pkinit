@@ -111,7 +111,7 @@ impl ClpreauthModule for PkinitClient {
             pkinit_trace!(ctx, "PKINIT client using anonymous mode");
             let identity = PkinitIdentity {
                 cert_der: vec![],
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             };
             self.state = Some(build_client(

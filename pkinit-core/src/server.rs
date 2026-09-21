@@ -314,15 +314,15 @@ impl PkinitKdcState {
             .to_der()
             .map_err(asn1_err("encode KDCKEMInfo"))?;
 
-        let signer_key = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
-            self.identity.key_pkcs8_der.clone(),
-        );
+        let signer_key = self.identity.signing_key.as_ref().ok_or_else(|| {
+            PkinitError::IdentityLoadFailed("KDC identity has no signing key".into())
+        })?;
         let extra_certs: Vec<&[u8]> = self.identity.chain.iter().map(|c| c.as_slice()).collect();
 
         let kem_signed_data = cms::create_signed_data(
             &kdc_kem_info_der,
             crate::constants::ID_PKINIT_KEM_KEY_DATA,
-            &signer_key,
+            signer_key,
             &self.identity.cert_der,
             &extra_certs,
             "sha256",
@@ -377,15 +377,15 @@ impl PkinitKdcState {
             .to_der()
             .map_err(asn1_err("encode KDCDHKeyInfo"))?;
 
-        let signer_key = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
-            self.identity.key_pkcs8_der.clone(),
-        );
+        let signer_key = self.identity.signing_key.as_ref().ok_or_else(|| {
+            PkinitError::IdentityLoadFailed("KDC identity has no signing key".into())
+        })?;
         let extra_certs: Vec<&[u8]> = self.identity.chain.iter().map(|c| c.as_slice()).collect();
 
         let signed_kdc_dh = cms::create_signed_data(
             &kdc_dh_key_info_der,
             synta_krb5::pkinit::ID_PKINIT_DHKEY_DATA,
-            &signer_key,
+            signer_key,
             &self.identity.cert_der,
             &extra_certs,
             "sha256",
@@ -667,7 +667,11 @@ mod tests {
 
                 PkinitIdentity {
                     cert_der,
-                    key_pkcs8_der: pkcs8,
+                    signing_key: Some(
+                        synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
+                            pkcs8,
+                        ),
+                    ),
                     chain: vec![ca_cert_der.clone()],
                 }
             };

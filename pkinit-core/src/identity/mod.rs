@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use synta_certificate::crypto::BackendPrivateKey;
+
 use crate::error::PkinitError;
 
 pub mod loader;
@@ -10,7 +12,14 @@ pub use store::TrustStore;
 
 pub struct PkinitIdentity {
     pub cert_der: Vec<u8>,
-    pub key_pkcs8_der: Vec<u8>,
+    /// Signing key for this identity, or `None` for anonymous / unsigned
+    /// identities (which also carry an empty `cert_der`).
+    ///
+    /// For file, directory, PKCS#12, and environment identities this wraps the
+    /// exported PKCS#8 key material.  For PKCS#11 identities it is a live,
+    /// token-backed handle: the private key never leaves the hardware, so it
+    /// cannot be — and is never — serialised back to PKCS#8.
+    pub signing_key: Option<BackendPrivateKey>,
     pub chain: Vec<Vec<u8>>,
 }
 
