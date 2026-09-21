@@ -141,6 +141,33 @@ The broker's approval selects which anchors to trust — the certificate chain,
 KDC EKU, and KDC SAN are still verified cryptographically. Everything fails
 closed: no broker, a timeout, or a denial aborts the exchange.
 
+```mermaid
+sequenceDiagram
+    actor User
+    participant kinit as kinit (clpreauth)
+    participant KDC
+    participant Broker as pkinit-trust-brokerd
+
+    kinit->>KDC: Anonymous AS-REQ (PA-PKINIT-KX)
+    KDC-->>kinit: AS-REP + KDC certificate chain
+    Note over kinit: Chain doesn't verify against pkinit_anchors
+    kinit->>Broker: RequestTrust(realm, kdc_principal, signer_cert, …) [varlink]
+    alt cached, unexpired grant
+        Broker-->>kinit: trusted
+    else no grant, expired, or first time
+        Broker->>User: Prompt (desktop notification or client tty via SO_PEERCRED)
+        User-->>Broker: approve (duration) or deny
+        Broker-->>kinit: trusted / denied
+    end
+    alt denied, timeout, or broker unreachable
+        Note over kinit: Fail closed (no further request)
+    else trusted
+        kinit->>KDC: Authenticated AS-REQ (real identity)
+        KDC-->>kinit: AS-REP
+        Note over kinit,KDC: Validated against the broker-approved anchor
+    end
+```
+
 A reference broker daemon (`pkinit-trust-brokerd`) that remembers per-realm
 pins ships in this workspace; the varlink interface it speaks is defined in
 `pkinit-trust-proto`. Each approval is time-boxed: the user picks how long to
