@@ -163,7 +163,9 @@ fn generate_test_pki(key_type: TestKeyType) -> (PkinitIdentity, PkinitIdentity, 
 
             PkinitIdentity {
                 cert_der,
-                key_pkcs8_der: pkcs8,
+                signing_key: Some(
+                    synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(pkcs8),
+                ),
                 chain: vec![ca_cert_der.clone()],
             }
         };
@@ -254,7 +256,7 @@ fn run_anonymous_exchange(dh_group: DhGroup) {
 
     let anon_identity = PkinitIdentity {
         cert_der: vec![],
-        key_pkcs8_der: vec![],
+        signing_key: None,
         chain: vec![],
     };
 
@@ -739,7 +741,7 @@ fn pkinit_kem_anonymous_exchange() {
 
     let anon_identity = PkinitIdentity {
         cert_der: vec![],
-        key_pkcs8_der: vec![],
+        signing_key: None,
         chain: vec![],
     };
 
@@ -809,7 +811,7 @@ fn pkinit_anonymous_rsa_exchange() {
 
     let anon_identity = PkinitIdentity {
         cert_der: vec![],
-        key_pkcs8_der: vec![],
+        signing_key: None,
         chain: vec![],
     };
 

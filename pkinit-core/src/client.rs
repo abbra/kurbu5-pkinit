@@ -321,16 +321,18 @@ impl PkinitClientState {
         let signed_auth_pack = if self.identity.cert_der.is_empty() {
             cms::create_unsigned_data(&auth_pack_der, synta_krb5::pkinit::ID_PKINIT_AUTH_DATA)?
         } else {
-            let signer_key = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(
-                self.identity.key_pkcs8_der.clone(),
-            );
+            let signer_key = self.identity.signing_key.as_ref().ok_or_else(|| {
+                PkinitError::IdentityLoadFailed(
+                    "client identity has a certificate but no signing key".into(),
+                )
+            })?;
             let extra_certs: Vec<&[u8]> =
                 self.identity.chain.iter().map(|c| c.as_slice()).collect();
 
             cms::create_signed_data(
                 &auth_pack_der,
                 synta_krb5::pkinit::ID_PKINIT_AUTH_DATA,
-                &signer_key,
+                signer_key,
                 &self.identity.cert_der,
                 &extra_certs,
                 "sha256",
@@ -783,7 +785,7 @@ mod tests {
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: vec![],
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(), // empty: configured validation fails, forcing the broker path
@@ -876,7 +878,7 @@ mod tests {
     fn client_state_construction() {
         let identity = PkinitIdentity {
             cert_der: vec![],
-            key_pkcs8_der: vec![],
+            signing_key: None,
             chain: vec![],
         };
         let store = TrustStore::new();
@@ -891,7 +893,7 @@ mod tests {
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: vec![],
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(),
@@ -906,7 +908,7 @@ mod tests {
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: vec![],
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(),
@@ -929,7 +931,7 @@ mod tests {
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: vec![],
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(),
@@ -950,7 +952,7 @@ mod tests {
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: vec![],
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(),
@@ -966,7 +968,7 @@ mod tests {
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: vec![],
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(),
@@ -991,7 +993,7 @@ mod tests {
         let kdc = PkinitKdcState::new(
             PkinitIdentity {
                 cert_der: vec![],
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(),
@@ -1020,7 +1022,7 @@ mod tests {
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: pq_cert_der,
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(),
@@ -1045,7 +1047,7 @@ mod tests {
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: pq_cert_der,
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(),
@@ -1068,7 +1070,7 @@ mod tests {
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: vec![],
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(),
@@ -1095,7 +1097,7 @@ mod tests {
         let mut state = PkinitClientState::new(
             PkinitIdentity {
                 cert_der: pq_cert_der,
-                key_pkcs8_der: vec![],
+                signing_key: None,
                 chain: vec![],
             },
             TrustStore::new(),
