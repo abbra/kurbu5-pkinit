@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use notify_rust::{Notification, Urgency};
 
-use pkinit_trust_brokerd::store::{GrantTtl, Prompter, TrustRequest};
+use pkinit_trust_brokerd::store::{GrantTtl, PROMPT_TIMEOUT, Prompter, TrustRequest};
 
 const DENY_ACTION: &str = "deny";
 
@@ -109,8 +109,7 @@ impl NotifyPrompter {
             .body(&body)
             .icon("dialog-password")
             .urgency(Urgency::Critical)
-            // Use 5 minutes (300s) for timeout
-            .timeout(Duration::from_secs(300));
+            .timeout(PROMPT_TIMEOUT);
         // Deny first: the one action guaranteed to survive truncation on a
         // notification UI that renders only some of what we register (see
         // module docs) must be the one that fails closed, not a grant.

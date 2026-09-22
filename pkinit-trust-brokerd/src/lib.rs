@@ -4,6 +4,8 @@
 
 pub mod store;
 
+use std::sync::{Arc, Mutex};
+
 use base64::Engine;
 use pkinit_trust_proto::{KdcTrustError, TrustReply, TrustStoreReply};
 use zlink::connection::socket::FetchPeerCredentials;
@@ -14,13 +16,16 @@ use store::{PinStore, Prompter};
 /// The varlink `org.kurbu5.pkinit.KdcTrust` service: a pin store plus a
 /// prompter for interactive (unknown-realm) decisions.
 pub struct Broker {
-    store: PinStore,
-    prompter: Box<dyn Prompter>,
+    store: Arc<Mutex<PinStore>>,
+    prompter: Arc<dyn Prompter>,
 }
 
 impl Broker {
     pub fn new(store: PinStore, prompter: Box<dyn Prompter>) -> Self {
-        Self { store, prompter }
+        Self {
+            store: Arc::new(Mutex::new(store)),
+            prompter: prompter.into(),
+        }
     }
 }
 
@@ -63,15 +68,29 @@ where
             .ok()
             .map(|creds| creds.process_id().as_raw_pid());
 
-        let reply = self.store.decide(
-            realm,
-            kdc_principal,
-            client_pid,
-            &signer,
-            &presented,
-            interactive,
-            self.prompter.as_ref(),
-        );
+        // `decide()` may block on an interactive prompter (tty read, D-Bus
+        // notification wait); run it on smol's blocking-thread pool so a
+        // slow/unresponsive human doesn't park the executor thread in a
+        // blocking syscall. (The zlink server still serializes requests
+        // through `&mut self`, so other clients wait regardless; the benefit
+        // is a bounded timeout on blocking I/O and a free executor thread.)
+        let store = Arc::clone(&self.store);
+        let prompter = Arc::clone(&self.prompter);
+        let realm_owned = realm.to_string();
+        let kdc_principal_owned = kdc_principal.to_string();
+        let reply = smol::unblock(move || {
+            let mut pin_store = store.lock().unwrap_or_else(|e| e.into_inner());
+            pin_store.decide(
+                &realm_owned,
+                &kdc_principal_owned,
+                client_pid,
+                &signer,
+                &presented,
+                interactive,
+                prompter.as_ref(),
+            )
+        })
+        .await;
         eprintln!(
             "[broker] realm={} interactive={interactive} decision={:?}",
             store::sanitize_for_display(realm),
@@ -83,8 +102,9 @@ where
     /// Snapshot of every realm currently trusted, for a separate client to
     /// turn into permanent `pkinit_anchors` configuration.
     async fn list_trusted_realms(&mut self) -> Result<TrustStoreReply, KdcTrustError<'_>> {
+        let pin_store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         Ok(TrustStoreReply {
-            realms: self.store.trusted_realms(),
+            realms: pin_store.trusted_realms(),
         })
     }
 }
