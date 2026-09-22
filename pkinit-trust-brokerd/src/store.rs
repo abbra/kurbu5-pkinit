@@ -69,6 +69,11 @@ pub const GRANT_PRESETS: &[(&str, GrantTtl)] = &[
     ("forever", GrantTtl::Forever),
 ];
 
+/// How long an interactive prompt (tty or GUI notification) waits for a
+/// response before failing closed. Shared so every prompter times out
+/// consistently.
+pub const PROMPT_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Everything a prompter needs to show the user (or a log) what trust is
 /// being requested.
 pub struct TrustRequest<'a> {
@@ -87,9 +92,10 @@ pub struct TrustRequest<'a> {
 }
 
 /// A prompter decides interactive (unknown-realm) requests. Returning
-/// `Some(ttl)` approves and pins for that duration; `None` denies. `Send` so
-/// the owning `Broker` service stays `Send` for the zlink server.
-pub trait Prompter: Send {
+/// `Some(ttl)` approves and pins for that duration; `None` denies. `Send +
+/// Sync` so the owning `Broker` can share it (via `Arc`) with the blocking
+/// thread pool `decide()` runs on.
+pub trait Prompter: Send + Sync {
     fn confirm(&self, req: &TrustRequest<'_>) -> Option<GrantTtl>;
 }
 
