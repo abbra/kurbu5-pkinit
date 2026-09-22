@@ -240,10 +240,11 @@ impl PinStore {
         })
     }
 
-    fn sha256_hex(der: &[u8]) -> String {
+    /// `None` if the configured hasher backend can't compute the digest.
+    fn sha256_hex(der: &[u8]) -> Option<String> {
         let hasher = synta_certificate::default_data_hasher();
-        let digest = hasher.hash_data("sha256", der).expect("sha256 digest");
-        digest.iter().map(|b| format!("{b:02x}")).collect()
+        let digest = hasher.hash_data("sha256", der).ok()?;
+        Some(digest.iter().map(|b| format!("{b:02x}")).collect())
     }
 
     /// Apply the decision table. Fail closed when the presented CMS chain has
@@ -268,7 +269,13 @@ impl PinStore {
                 reason: Some("presented chain contains no valid CA certificate".into()),
             };
         };
-        let fp = Self::sha256_hex(ca);
+        let Some(fp) = Self::sha256_hex(ca) else {
+            return TrustReply {
+                decision: Decision::Denied,
+                anchors: vec![],
+                reason: Some("failed to compute CA fingerprint".into()),
+            };
+        };
         let ca_b64 = base64::engine::general_purpose::STANDARD.encode(ca);
         let now = now_secs();
 
@@ -586,7 +593,7 @@ mod tests {
         let mut store = PinStore::in_memory();
         let (signer, certs) = alice();
         let ca_b64 = base64::engine::general_purpose::STANDARD.encode(&certs[0]);
-        let fp = PinStore::sha256_hex(&certs[0]);
+        let fp = PinStore::sha256_hex(&certs[0]).unwrap();
 
         let _ = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
 
@@ -689,7 +696,7 @@ mod tests {
         let mut store = PinStore::in_memory();
         let (signer, certs) = carol_pq();
         let ca_b64 = base64::engine::general_purpose::STANDARD.encode(&certs[0]);
-        let fp = PinStore::sha256_hex(&certs[0]);
+        let fp = PinStore::sha256_hex(&certs[0]).unwrap();
 
         let _ = store.decide("R", KDC_PRINCIPAL, None, &signer, &certs, true, &Yes);
 
