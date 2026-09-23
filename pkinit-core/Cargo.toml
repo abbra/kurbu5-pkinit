@@ -21,3 +21,4 @@ test-util = []
 tempfile = "3"
 pkinit-core = { path = ".", features = ["test-util"] }
 parking_lot = "0.12"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
