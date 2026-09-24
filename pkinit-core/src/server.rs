@@ -529,7 +529,7 @@ mod tests {
     use crate::client::PkinitClientState;
     use crate::config::{PkinitClientConfig, PkinitKdcConfig};
     use crate::constants;
-    use crate::test_support::next_nonce;
+    use crate::test_support::{next_nonce, test_validity};
 
     struct MockO2K;
     impl crate::crypto::kdf::OctetString2Key for MockO2K {
@@ -556,7 +556,7 @@ mod tests {
     }
 
     fn generate_test_pki() -> (PkinitIdentity, PkinitIdentity, TrustStore) {
-        use synta::{Integer, UtcTime};
+        use synta::Integer;
         use synta_certificate::{
             CertificateBuilder, ExtendedKeyUsageBuilder, NameBuilder,
             SubjectAlternativeNameBuilder, Time,
@@ -588,13 +588,14 @@ mod tests {
         .unwrap();
         let bc_der = synta_certificate::encode_basic_constraints(true, None).unwrap();
 
+        let (nb, na) = test_validity().expect("validity window");
         let ca_cert_der = CertificateBuilder::new()
             .subject_name(&ca_name)
             .issuer_name(&ca_name)
             .public_key_der(&ca_spki)
             .serial_number(Integer::from_i64(1))
-            .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-            .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+            .not_valid_before(Time::UtcTime(nb))
+            .not_valid_after(Time::UtcTime(na))
             .add_extension_oid(
                 synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,
                 false,
@@ -611,6 +612,7 @@ mod tests {
 
         let make_identity =
             |cn: &str, san_oid_data: Vec<u8>, eku_oid: &[u32], serial: i64| -> PkinitIdentity {
+                let (nb, na) = test_validity().expect("validity window");
                 let ee_key = BackendPrivateKey::generate_ec("P-256").unwrap();
                 let pkcs8 = ee_key.to_der().unwrap();
                 let spki = ee_key.public_key_spki_der().unwrap();
@@ -647,8 +649,8 @@ mod tests {
                     .issuer_name(&ca_name)
                     .public_key_der(&spki)
                     .serial_number(Integer::from_i64(serial))
-                    .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-                    .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+                    .not_valid_before(Time::UtcTime(nb))
+                    .not_valid_after(Time::UtcTime(na))
                     .add_extension_oid(synta_certificate::oids::SUBJECT_ALT_NAME, false, &san_der)
                     .add_extension_oid(synta_certificate::oids::EXTENDED_KEY_USAGE, false, &eku_der)
                     .add_extension_oid(synta_certificate::oids::KEY_USAGE, true, &ku_der)

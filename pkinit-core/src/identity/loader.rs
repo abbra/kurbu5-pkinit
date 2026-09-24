@@ -249,7 +249,8 @@ fn pkcs11_cert_uri(uri: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use synta::{Integer, UtcTime};
+    use crate::test_support::test_validity;
+    use synta::Integer;
     use synta_certificate::crypto::PrivateKey;
     use synta_certificate::{
         CertificateBuilder, NameBuilder, OpensslPkcs12Encryptor, Pkcs12Builder, Time,
@@ -280,13 +281,14 @@ mod tests {
             .build()
             .expect("build name");
 
+        let (nb, na) = test_validity().expect("validity window");
         let cert_der = CertificateBuilder::new()
             .subject_name(&name)
             .issuer_name(&name)
             .public_key_der(&spki_der)
             .serial_number(Integer::from_i64(1))
-            .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-            .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+            .not_valid_before(Time::UtcTime(nb))
+            .not_valid_after(Time::UtcTime(na))
             .sign(&signer)
             .expect("sign cert");
 

@@ -556,10 +556,11 @@ fn retag_as_set(content: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::test_validity;
     use synta_certificate::PrivateKeyBuilder;
 
     fn generate_test_keypair_and_cert() -> (Box<dyn PrivateKey>, Vec<u8>) {
-        use synta::{Integer, UtcTime};
+        use synta::Integer;
         use synta_certificate::{CertificateBuilder, NameBuilder, Time};
 
         let key = PrivateKeyBuilder::ec("P-256")
@@ -572,13 +573,14 @@ mod tests {
             .build()
             .expect("build name");
 
+        let (nb, na) = test_validity().expect("validity window");
         let cert_der = CertificateBuilder::new()
             .subject_name(&name)
             .issuer_name(&name)
             .public_key_der(&spki_der)
             .serial_number(Integer::from_i64(1))
-            .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-            .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+            .not_valid_before(Time::UtcTime(nb))
+            .not_valid_after(Time::UtcTime(na))
             .sign(&key.as_signer("sha256"))
             .expect("sign cert");
 
@@ -679,7 +681,7 @@ mod tests {
     }
 
     fn generate_rsa_keypair_and_cert() -> (Box<dyn PrivateKey>, Vec<u8>) {
-        use synta::{Integer, UtcTime};
+        use synta::Integer;
         use synta_certificate::{CertificateBuilder, NameBuilder, Time};
 
         let key = PrivateKeyBuilder::rsa(2048)
@@ -692,13 +694,14 @@ mod tests {
             .build()
             .expect("build name");
 
+        let (nb, na) = test_validity().expect("validity window");
         let cert_der = CertificateBuilder::new()
             .subject_name(&name)
             .issuer_name(&name)
             .public_key_der(&spki_der)
             .serial_number(Integer::from_i64(1))
-            .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-            .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+            .not_valid_before(Time::UtcTime(nb))
+            .not_valid_after(Time::UtcTime(na))
             .sign(&key.as_signer("sha256"))
             .expect("sign cert");
 
