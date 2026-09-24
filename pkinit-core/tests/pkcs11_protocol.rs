@@ -64,8 +64,8 @@ use pkinit_core::crypto::kdf::OctetString2Key;
 use pkinit_core::error::PkinitError;
 use pkinit_core::identity::{IdentitySource, PkinitIdentity, TrustStore};
 use pkinit_core::server::{BuildAsRepParams, PkinitKdcState};
-use pkinit_core::test_support::next_nonce;
-use synta::{Integer, UtcTime};
+use pkinit_core::test_support::{next_nonce, test_validity};
+use synta::Integer;
 use synta_certificate::crypto::{BackendPrivateKey, DataHasher, PrivateKey};
 use synta_certificate::{
     Certificate, CertificateBuilder, ExtendedKeyUsageBuilder, Extensions, GeneralName,
@@ -607,13 +607,14 @@ fn build_test_pki(client_spki: &[u8], key: TestKey) -> (Vec<u8>, PkinitIdentity,
     .unwrap();
     let bc_der = synta_certificate::encode_basic_constraints(true, None).unwrap();
 
+    let (nb, na) = test_validity().expect("validity window");
     let ca_cert_der = CertificateBuilder::new()
         .subject_name(&ca_name)
         .issuer_name(&ca_name)
         .public_key_der(&ca_spki)
         .serial_number(Integer::from_i64(1))
-        .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-        .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+        .not_valid_before(Time::UtcTime(nb))
+        .not_valid_after(Time::UtcTime(na))
         .add_extension_oid(
             synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,
             false,
@@ -657,13 +658,14 @@ fn build_test_pki(client_spki: &[u8], key: TestKey) -> (Vec<u8>, PkinitIdentity,
     )
     .unwrap();
 
+    let (nb, na) = test_validity().expect("validity window");
     let client_cert_der = CertificateBuilder::new()
         .subject_name(&client_name)
         .issuer_name(&ca_name)
         .public_key_der(client_spki)
         .serial_number(Integer::from_i64(2))
-        .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-        .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+        .not_valid_before(Time::UtcTime(nb))
+        .not_valid_after(Time::UtcTime(na))
         .add_extension_oid(
             synta_certificate::oids::SUBJECT_ALT_NAME,
             false,
@@ -716,13 +718,14 @@ fn build_test_pki(client_spki: &[u8], key: TestKey) -> (Vec<u8>, PkinitIdentity,
     )
     .unwrap();
 
+    let (nb, na) = test_validity().expect("validity window");
     let kdc_cert_der = CertificateBuilder::new()
         .subject_name(&kdc_name)
         .issuer_name(&ca_name)
         .public_key_der(&kdc_spki)
         .serial_number(Integer::from_i64(3))
-        .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-        .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+        .not_valid_before(Time::UtcTime(nb))
+        .not_valid_after(Time::UtcTime(na))
         .add_extension_oid(
             synta_certificate::oids::SUBJECT_ALT_NAME,
             false,

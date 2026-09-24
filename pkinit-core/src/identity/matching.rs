@@ -202,7 +202,8 @@ fn simple_match(haystack: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use synta::{Integer, UtcTime};
+    use crate::test_support::test_validity;
+    use synta::Integer;
     use synta_certificate::{
         CertificateBuilder, ExtendedKeyUsageBuilder, NameBuilder, PrivateKeyBuilder,
         SubjectAlternativeNameBuilder, Time,
@@ -219,13 +220,14 @@ mod tests {
             .build()
             .expect("build name");
 
+        let (nb, na) = test_validity().expect("validity window");
         let mut builder = CertificateBuilder::new()
             .subject_name(&name)
             .issuer_name(&name)
             .public_key_der(&spki)
             .serial_number(Integer::from_i64(1))
-            .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-            .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()));
+            .not_valid_before(Time::UtcTime(nb))
+            .not_valid_after(Time::UtcTime(na));
 
         if !dns_sans.is_empty() {
             let mut san_builder = SubjectAlternativeNameBuilder::new();

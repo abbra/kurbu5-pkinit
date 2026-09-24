@@ -5,7 +5,7 @@ use pkinit_core::crypto::kdf::OctetString2Key;
 use pkinit_core::error::PkinitError;
 use pkinit_core::identity::{PkinitIdentity, TrustStore};
 use pkinit_core::server::{BuildAsRepParams, PkinitKdcState};
-use pkinit_core::test_support::next_nonce;
+use pkinit_core::test_support::{next_nonce, test_validity};
 use synta_certificate::crypto::{BackendPrivateKey, PrivateKey};
 
 struct TestO2K;
@@ -53,7 +53,7 @@ fn generate_key(key_type: TestKeyType) -> BackendPrivateKey {
 }
 
 fn generate_test_pki(key_type: TestKeyType) -> (PkinitIdentity, PkinitIdentity, TrustStore) {
-    use synta::{Integer, UtcTime};
+    use synta::Integer;
     use synta_certificate::{
         CertificateBuilder, ExtendedKeyUsageBuilder, NameBuilder, SubjectAlternativeNameBuilder,
         Time,
@@ -84,13 +84,14 @@ fn generate_test_pki(key_type: TestKeyType) -> (PkinitIdentity, PkinitIdentity, 
     .unwrap();
     let bc_der = synta_certificate::encode_basic_constraints(true, None).unwrap();
 
+    let (nb, na) = test_validity().expect("validity window");
     let ca_cert_der = CertificateBuilder::new()
         .subject_name(&ca_name)
         .issuer_name(&ca_name)
         .public_key_der(&ca_spki)
         .serial_number(Integer::from_i64(1))
-        .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-        .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+        .not_valid_before(Time::UtcTime(nb))
+        .not_valid_after(Time::UtcTime(na))
         .add_extension_oid(
             synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,
             false,
@@ -107,6 +108,7 @@ fn generate_test_pki(key_type: TestKeyType) -> (PkinitIdentity, PkinitIdentity, 
 
     let make_identity =
         |cn: &str, san_oid_data: Vec<u8>, eku_oid: &[u32], serial: i64| -> PkinitIdentity {
+            let (nb, na) = test_validity().expect("validity window");
             let ee_key = generate_key(key_type);
             let pkcs8 = ee_key.to_der().unwrap();
             let spki = ee_key.public_key_spki_der().unwrap();
@@ -143,8 +145,8 @@ fn generate_test_pki(key_type: TestKeyType) -> (PkinitIdentity, PkinitIdentity, 
                 .issuer_name(&ca_name)
                 .public_key_der(&spki)
                 .serial_number(Integer::from_i64(serial))
-                .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-                .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+                .not_valid_before(Time::UtcTime(nb))
+                .not_valid_after(Time::UtcTime(na))
                 .add_extension_oid(synta_certificate::oids::SUBJECT_ALT_NAME, false, &san_der)
                 .add_extension_oid(synta_certificate::oids::EXTENDED_KEY_USAGE, false, &eku_der)
                 .add_extension_oid(synta_certificate::oids::KEY_USAGE, true, &ku_der)

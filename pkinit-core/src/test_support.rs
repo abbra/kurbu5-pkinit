@@ -2,9 +2,10 @@
 //! integration tests under `tests/`.
 
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use native_ossl::pkey::{KeygenCtx, Pkey, Private};
-use synta::{Integer, UtcTime};
+use synta::{GeneralizedTime, Integer, UtcTime};
 use synta_certificate::{
     CertificateBuilder, ExtendedKeyUsageBuilder, NameBuilder, SubjectAlternativeNameBuilder, Time,
 };
@@ -14,6 +15,27 @@ use synta_certificate::{
 pub fn next_nonce() -> i32 {
     static NEXT: AtomicI32 = AtomicI32::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Test certificate validity window relative to the current UTC date: from
+/// 90 days before now to 90 days after now. Tests should issue all
+/// certificates (CAs included) with this window instead of hardcoded dates,
+/// so they keep passing as the system clock advances.
+pub fn test_validity() -> Option<(UtcTime, UtcTime)> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+    let secs = now.as_secs() as i64;
+    let period = 90 * 24 * 60 * 60;
+    Some((
+        unix_to_utc_time(secs - period)?,
+        unix_to_utc_time(secs + period)?,
+    ))
+}
+
+/// Convert Unix epoch seconds to an ASN.1 UTCTime, via
+/// [`GeneralizedTime::from_unix`] (Hinnant calendar conversion).
+fn unix_to_utc_time(secs: i64) -> Option<UtcTime> {
+    let gt = GeneralizedTime::from_unix(secs)?;
+    UtcTime::new(gt.year, gt.month, gt.day, gt.hour, gt.minute, gt.second).ok()
 }
 
 /// A minimal KDC certificate chain for tests: a self-signed CA and a KDC leaf
@@ -64,13 +86,14 @@ fn sign_cert(
     )
     .expect("AKI");
 
+    let (nb, na) = test_validity().expect("validity window");
     let mut builder = CertificateBuilder::new()
         .subject_name(subject_name)
         .issuer_name(issuer_name)
         .public_key_der(subject_spki_der)
         .serial_number(Integer::from_i64(serial))
-        .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-        .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+        .not_valid_before(Time::UtcTime(nb))
+        .not_valid_after(Time::UtcTime(na))
         .add_extension_oid(
             synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,
             false,

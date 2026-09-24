@@ -201,8 +201,9 @@ impl Clone for TrustStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::test_validity;
     use native_ossl::pkey::{KeygenCtx, Pkey, Private};
-    use synta::{Integer, UtcTime};
+    use synta::Integer;
     use synta_certificate::{CertificateBuilder, NameBuilder, Time};
 
     fn generate_ec_key() -> Pkey<Private> {
@@ -243,13 +244,14 @@ mod tests {
         )
         .expect("AKI");
 
+        let (nb, na) = test_validity().expect("validity window");
         let mut builder = CertificateBuilder::new()
             .subject_name(subject_name)
             .issuer_name(issuer_name)
             .public_key_der(subject_spki_der)
             .serial_number(Integer::from_i64(serial))
-            .not_valid_before(Time::UtcTime(UtcTime::new(2025, 1, 1, 0, 0, 0).unwrap()))
-            .not_valid_after(Time::UtcTime(UtcTime::new(2027, 1, 1, 0, 0, 0).unwrap()))
+            .not_valid_before(Time::UtcTime(nb))
+            .not_valid_after(Time::UtcTime(na))
             .add_extension_oid(
                 synta_certificate::oids::SUBJECT_KEY_IDENTIFIER,
                 false,

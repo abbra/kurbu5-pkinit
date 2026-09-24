@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use pkinit_core::identity::{IdentitySource, PkinitIdentity};
+use pkinit_core::test_support::test_validity;
 
 const PKCS11_TOOL: &str = "/usr/bin/pkcs11-tool";
 fn token_label() -> &'static str {
@@ -203,7 +204,9 @@ impl Fixture {
     /// The certificate content is otherwise irrelevant to what this test checks
     /// (cert round-trip + a usable token-backed signing key).
     fn build_and_import_cert(&mut self) -> bool {
-        use synta_certificate::{BackendPrivateKey, CertificateBuilder, NameBuilder, PrivateKey};
+        use synta_certificate::{
+            BackendPrivateKey, CertificateBuilder, NameBuilder, PrivateKey, Time,
+        };
 
         let key = BackendPrivateKey::generate_ec("P-256").expect("generate EC key");
         let spki = key.public_key_spki_der().expect("spki");
@@ -211,16 +214,15 @@ impl Fixture {
             .common_name("PKINIT PKCS11 Client")
             .build()
             .expect("name");
-        let nb = synta_certificate::parse_time("20240101000000Z").expect("nb");
-        let na = synta_certificate::parse_time("20340101000000Z").expect("na");
+        let (nb, na) = test_validity().expect("validity window");
         let signer = key.as_signer("sha256");
         let cert_der = CertificateBuilder::new()
             .issuer_name(&name)
             .subject_name(&name)
             .public_key_der(&spki)
             .serial_number(synta::Integer::from_i64(1))
-            .not_valid_before(nb)
-            .not_valid_after(na)
+            .not_valid_before(Time::UtcTime(nb))
+            .not_valid_after(Time::UtcTime(na))
             .sign(&signer)
             .expect("sign cert");
         self.expected_cert = cert_der.clone();
