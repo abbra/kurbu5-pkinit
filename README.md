@@ -84,21 +84,28 @@ Prerequisites:
 - MIT Kerberos development headers (`krb5-devel` / `libkrb5-dev`), 1.21+
 - `libclang` (used by `bindgen` to generate the krb5 FFI bindings)
 - OpenSSL development headers
+- CMake (3.20+), for the install rules below
 
 ```sh
 cargo build --release
 ```
 
-This produces `target/release/libkurbu5_pkinit.so`.
+This produces `target/release/libkurbu5_pkinit.so`, along with
+`pkinit-trust-brokerd` and `pkinit-trust-ctl`. Building through CMake
+instead (see Installing) invokes the same `cargo build` under the hood:
+
+```sh
+cmake -B build
+cmake --build build
+```
 
 ## Installing
 
-Copy (or symlink) the built shared object into your krb5 plugin directory,
-typically as `pkinit.so`:
+CMake places the plugin, the two trust-broker binaries, and the systemd
+user units in their standard locations, renaming the plugin to `pkinit.so`:
 
 ```sh
-install -m 755 target/release/libkurbu5_pkinit.so \
-    /usr/lib64/krb5/plugins/preauth/pkinit.so
+cmake --install build
 ```
 
 The plugin registers itself for both client (`kinit`) and KDC use; no
