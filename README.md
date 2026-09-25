@@ -212,14 +212,22 @@ Password for user@DEMO.EXAMPLE.COM:
 
 The daemon supports systemd socket activation (`sd_listen_fds(3)`), so it
 doesn't need to be started ahead of time: `contrib/systemd/` ships a
-reference `.socket`/`.service` pair for a per-user instance. Install them
-(adjusting the `ExecStart` path to wherever `pkinit-trust-brokerd` actually
-lives — this project ships no packaging yet) and enable the socket:
+reference `.socket`/`.service` pair for a per-user instance.
+`cmake --install` (see [Installing](#installing)) places both units,
+with `ExecStart` already pointing at the installed binary, under
+`lib/systemd/user/`. Enable the socket:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now pkinit-trust-brokerd.socket
+```
+
+Installing from a non-standard prefix, or without CMake, requires copying
+the units manually and adjusting `ExecStart` to wherever
+`pkinit-trust-brokerd` actually lives:
 
 ```sh
 cp contrib/systemd/pkinit-trust-brokerd.{socket,service} ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now pkinit-trust-brokerd.socket
 ```
 
 The first connection (i.e. the first anonymous PKINIT exchange with an

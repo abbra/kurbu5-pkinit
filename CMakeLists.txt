@@ -30,3 +30,5 @@ install(PROGRAMS $<TARGET_FILE:pkinit-trust-brokerd>
 
 install(PROGRAMS $<TARGET_FILE:pkinit-trust-ctl>
         DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+add_subdirectory(contrib/systemd)
