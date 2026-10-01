@@ -241,7 +241,12 @@ impl ClpreauthModule for PkinitClient {
             }
             PA_PK_AS_REP => {
                 pkinit_trace!(ctx, "PKINIT client processing AS-REP");
-                let state = self.state.as_mut().ok_or(Krb5Error::Custom(libc::EINVAL))?;
+                // self.state is also unset here when init_etype_info found no
+                // configured identity. Decline with NoHandle rather than
+                // hard-failing, matching the PA_PK_AS_REQ arm above, in case
+                // libkrb5 ever dispatches PA_PK_AS_REP after this module
+                // declined PA_PK_AS_REQ.
+                let state = self.state.as_mut().ok_or(Krb5Error::NoHandle)?;
 
                 let nonce = unsafe { (*req.request).nonce };
                 let enctype = callbacks.get_etype();
