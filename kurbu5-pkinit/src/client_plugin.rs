@@ -128,7 +128,16 @@ impl ClpreauthModule for PkinitClient {
             return Ok(());
         }
 
-        let identity_str = self.config.identity.as_deref().ok_or(Krb5Error::NoHandle)?;
+        // No identity configured: leave self.state unset and succeed, so a
+        // password-only principal can still fall back to username/password
+        // (PA-ENC-TIMESTAMP) auth instead of a hard login failure. We can't
+        // decline PKINIT here. Unlike process(), any Err from init_etype_info
+        // aborts the whole AS-REQ instead of just skipping this mechanism. The
+        // actual decline (Krb5Error::NoHandle) happens in process()'s
+        // PA_PK_AS_REQ arm below, once self.state.as_mut() finds nothing.
+        let Some(identity_str) = self.config.identity.as_deref() else {
+            return Ok(());
+        };
         pkinit_trace!(ctx, "PKINIT loading identity {}", identity_str);
         let source =
             IdentitySource::parse(identity_str).map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
@@ -192,7 +201,12 @@ impl ClpreauthModule for PkinitClient {
                 Ok(vec![])
             }
             PA_PK_AS_REQ => {
-                let state = self.state.as_mut().ok_or(Krb5Error::Custom(libc::EINVAL))?;
+                // self.state is unset when init_etype_info found no configured
+                // identity (password-only principal). NoHandle here, unlike in
+                // init_etype_info, tells libkrb5 to skip PKINIT and fall back to
+                // username/password (PA-ENC-TIMESTAMP) auth for the AS-REQ,
+                // instead of aborting the login outright.
+                let state = self.state.as_mut().ok_or(Krb5Error::NoHandle)?;
 
                 let hint_contents = pa_data_contents(req.pa_data);
                 if !hint_contents.is_empty() {
