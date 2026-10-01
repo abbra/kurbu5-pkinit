@@ -96,9 +96,10 @@ impl ClpreauthModule for PkinitClient {
         let mut trust_store = TrustStore::new();
         for anchor in &self.config.anchors {
             pkinit_trace!(ctx, "PKINIT loading CA certs and CRLs from {}", anchor);
-            trust_store
-                .load_from_path(anchor)
-                .map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
+            trust_store.load_from_path(anchor).map_err(|e| {
+                pkinit_trace!(ctx, "PKINIT failed to load {}: {}", anchor, e);
+                Krb5Error::Custom(libc::EINVAL)
+            })?;
         }
 
         let server_principal = unsafe {
