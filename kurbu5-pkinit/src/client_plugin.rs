@@ -93,6 +93,14 @@ impl ClpreauthModule for PkinitClient {
             Krb5Error::Custom(libc::EINVAL)
         })?;
 
+        // No identity configured and not anonymous: leave self.state unset and
+        // succeed, so a password-only principal can still fall back to
+        // username/password (PA-ENC-TIMESTAMP) auth. Check this before loading
+        // the trust store below, since that work would otherwise be wasted.
+        if !is_anonymous && self.config.identity.is_none() {
+            return Ok(());
+        }
+
         let mut trust_store = TrustStore::new();
         for anchor in &self.config.anchors {
             pkinit_trace!(ctx, "PKINIT loading CA certs and CRLs from {}", anchor);
@@ -128,16 +136,17 @@ impl ClpreauthModule for PkinitClient {
             return Ok(());
         }
 
-        // No identity configured: leave self.state unset and succeed, so a
-        // password-only principal can still fall back to username/password
-        // (PA-ENC-TIMESTAMP) auth instead of a hard login failure. We can't
-        // decline PKINIT here. Unlike process(), any Err from init_etype_info
-        // aborts the whole AS-REQ instead of just skipping this mechanism. The
-        // actual decline (Krb5Error::NoHandle) happens in process()'s
-        // PA_PK_AS_REQ arm below, once self.state.as_mut() finds nothing.
-        let Some(identity_str) = self.config.identity.as_deref() else {
-            return Ok(());
-        };
+        // self.config.identity is checked above, so this is always Some here.
+        // We can't decline PKINIT at this point: unlike process(), any Err
+        // from init_etype_info aborts the whole AS-REQ instead of just
+        // skipping this mechanism. The actual decline (Krb5Error::NoHandle)
+        // happens in process()'s PA_PK_AS_REQ arm, once self.state.as_mut()
+        // finds nothing.
+        let identity_str = self
+            .config
+            .identity
+            .as_deref()
+            .expect("checked above: identity is Some when not anonymous");
         pkinit_trace!(ctx, "PKINIT loading identity {}", identity_str);
         let source =
             IdentitySource::parse(identity_str).map_err(|_| Krb5Error::Custom(libc::EINVAL))?;
