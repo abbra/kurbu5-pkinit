@@ -323,7 +323,7 @@ impl PkinitClientState {
         let pk_auth = synta_krb5::pkinit::PKAuthenticator {
             cusec: synta::Integer::from(cusec),
             ctime: gen_time,
-            nonce: synta::Integer::from(nonce),
+            nonce: crate::kem_types::encode_nonce(nonce),
             pa_checksum: Some(OctetStringRef::new(&checksums.sha1)),
             freshness_token: freshness_ref.map(OctetStringRef::new),
             pa_checksum2: Some(pa_checksum2),
@@ -481,11 +481,11 @@ impl PkinitClientState {
             synta_krb5::pkinit::KDCDHKeyInfo::from_der(&verified.content)
                 .map_err(asn1_err("decode KDCDHKeyInfo"))?;
 
-        let reply_nonce = kdc_dh_key_info.nonce.as_i64().map_err(asn1_err("nonce"))?;
-        if reply_nonce != nonce as i64 {
+        let reply_nonce = crate::kem_types::decode_nonce(&kdc_dh_key_info.nonce)?;
+        if reply_nonce != nonce {
             return Err(PkinitError::NonceMismatch {
                 expected: nonce,
-                actual: reply_nonce as i32,
+                actual: reply_nonce,
             });
         }
 
@@ -587,11 +587,11 @@ impl PkinitClientState {
             .nonce
             .as_ref()
             .ok_or_else(|| PkinitError::Asn1("KDC omitted required nonce in KDCKEMInfo".into()))?;
-        let n = reply_nonce.as_i64().map_err(asn1_err("nonce"))?;
-        if n != params.nonce as i64 {
+        let n = crate::kem_types::decode_nonce(reply_nonce)?;
+        if n != params.nonce {
             return Err(PkinitError::NonceMismatch {
                 expected: params.nonce,
-                actual: n as i32,
+                actual: n,
             });
         }
 
