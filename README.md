@@ -128,7 +128,8 @@ under `[libdefaults]` / `[realms]` (client) and `[kdcdefaults]` / `[realms]`
 | `pkinit_dh_min_bits` | both | Minimum acceptable DH/EC group strength |
 | `pkinit_eku_checking` | both | `kpClientAuth`, `scLogin`, or `none` |
 | `pkinit_require_freshness_token` | both | Require an RFC 8070 freshness token |
-| `pkinit_pqc_min_algorithm` | both | Minimum ML-KEM strength to offer/accept |
+| `pkinit_pqc_min_algorithm` | both | Minimum ML-KEM strength to offer/accept: `ML-KEM-512`, `ML-KEM-768`, `ML-KEM-1024`, or (client) a composite KEM. An unrecognized name is a configuration error. |
+| `pkinit_pqc_composite_algorithms` | KDC | Composite (hybrid) KEMs to accept, one per line: `ML-KEM-768-X25519`, `ML-KEM-768-ECDH-P256`, `ML-KEM-1024-ECDH-P384`. Explicit opt-in; any other name is a configuration error. |
 | `pkinit_require_kem` | both | Refuse classic DH/ECDH, whatever the certificate algorithm (default `false`). The KDC rejects DH/ECDH requests with `KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED`, offering only ML-KEM in the typed data; the client always uses ML-KEM (ML-KEM-768 unless `pkinit_pqc_min_algorithm` says otherwise) and never falls back to DH/ECDH. Leave it off for peers without KEM support, such as MIT's own `pkinit.so`. |
 | `pkinit_allow_upn` | KDC | Accept Microsoft UPN SANs for client authorization |
 | `pkinit_indicator` | KDC | Authentication indicators to attach on successful PKINIT |

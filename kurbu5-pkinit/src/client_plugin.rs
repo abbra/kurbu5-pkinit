@@ -88,7 +88,10 @@ impl ClpreauthModule for PkinitClient {
 
         let realm = ctx.realm().ok();
         let profile = kurbu5_rs::Profile::from_context(ctx)?;
-        profile::read_client_config(&profile, realm.as_deref(), &mut self.config);
+        profile::read_client_config(&profile, realm.as_deref(), &mut self.config).map_err(|e| {
+            pkinit_trace!(ctx, "PKINIT client configuration error: {}", e);
+            Krb5Error::Custom(libc::EINVAL)
+        })?;
 
         let mut trust_store = TrustStore::new();
         for anchor in &self.config.anchors {
