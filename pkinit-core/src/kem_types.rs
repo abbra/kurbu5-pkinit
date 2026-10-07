@@ -71,23 +71,27 @@ impl<'a> KdcKemInfo<'a> {
     }
 }
 
-/// PkinitKEMSuppPubInfo binds the KEM KDF to a specific exchange.
+/// PkinitKEMSuppPubInfo binds the KEM KDF to a specific exchange. It is
+/// only ever the HKDF `info` input, never transmitted, and -- unlike the
+/// rest of KerberosV5-PK-INIT-SPEC -- its fields are IMPLICIT tagged
+/// (draft-bokovoy-kitten-pkinit-pqc-02 {{sec-asn1-types}}), so its exact
+/// encoding determines the reply key.
 ///
 /// ```asn1
 /// PkinitKEMSuppPubInfo ::= SEQUENCE {
-///     enctype         [0] Int32,
-///     as-REQ          [1] OCTET STRING,
-///     kemSignedData   [2] OCTET STRING,
+///     enctype         [0] IMPLICIT Int32,
+///     as-REQ          [1] IMPLICIT OCTET STRING,
+///     kemSignedData   [2] IMPLICIT OCTET STRING,
 ///     ...
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq, synta::Asn1Sequence)]
 pub struct PkinitKemSuppPubInfo {
-    #[asn1(tag(0, explicit))]
+    #[asn1(tag(0, implicit))]
     pub enctype: Integer,
-    #[asn1(tag(1, explicit))]
+    #[asn1(tag(1, implicit))]
     pub as_req: OctetString,
-    #[asn1(tag(2, explicit))]
+    #[asn1(tag(2, implicit))]
     pub kem_signed_data: OctetString,
 }
 
@@ -363,6 +367,28 @@ mod tests {
         let der = info.to_der().unwrap();
         let decoded = PkinitKemSuppPubInfo::from_der(&der).unwrap();
         assert_eq!(info, decoded);
+    }
+
+    /// Known-answer encoding: draft-02 makes every field IMPLICIT, so the
+    /// context tags are primitive (0x80..0x82) and wrap the INTEGER /
+    /// OCTET STRING contents directly. Any other tagging derives a
+    /// different reply key than a conformant peer.
+    #[test]
+    fn pkinit_kem_supp_pub_info_is_implicitly_tagged() {
+        let info = PkinitKemSuppPubInfo {
+            enctype: Integer::from(18),
+            as_req: OctetString::new(b"AB".to_vec()),
+            kem_signed_data: OctetString::new(b"CD".to_vec()),
+        };
+        assert_eq!(
+            info.to_der().unwrap(),
+            [
+                0x30, 0x0b, // SEQUENCE
+                0x80, 0x01, 0x12, // [0] IMPLICIT Int32 18
+                0x81, 0x02, b'A', b'B', // [1] IMPLICIT OCTET STRING
+                0x82, 0x02, b'C', b'D', // [2] IMPLICIT OCTET STRING
+            ]
+        );
     }
 
     #[test]
