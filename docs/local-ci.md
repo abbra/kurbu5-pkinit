@@ -36,8 +36,8 @@ The script needs bash 4 or later and checks for its tools at startup, printing
 | `valgrind` | `--valgrind` only |
 | `actionlint` (or `yamllint` as a fallback) | `lint-workflows`; skipped with a warning if neither is installed |
 
-Post-quantum key types (`mldsa*`) and `--pqc-min-algorithm` need an OpenSSL
-with ML-DSA and ML-KEM support (OpenSSL 3.5 or later).
+The key exchange is ML-KEM by default and the `mldsa*` key types use ML-DSA,
+so OpenSSL 3.5 or later is needed.
 
 Token mode in the playground has extra requirements; see
 [Client identity on a PKCS#11 token](#client-identity-on-a-pkcs11-token).
@@ -58,7 +58,7 @@ Token mode in the playground has extra requirements; see
 | `clippy` | `cargo clippy --workspace --all-features -- -D warnings` | `build` |
 | `doc` | `cargo doc --workspace --no-deps --all-features`, with `RUSTDOCFLAGS=-D warnings` | `build` |
 | `test` | `cargo test --workspace --all-features` | `build` |
-| `system-test` | `tests/system/pkinit/run.sh`: `kinit` against an ephemeral KDC, cross-tested with MIT's `pkinit.so` (us-us, us-mit, mit-us, mit-mit) | `build` |
+| `system-test` | `tests/system/pkinit/run.sh`: `kinit` against an ephemeral KDC, cross-tested with MIT's `pkinit.so` (us-us, us-mit, mit-us, mit-mit). us-us uses an ML-KEM-768 key exchange; the combos involving MIT use classic DH/ECDH, which is all MIT's `pkinit.so` supports | `build` |
 | `tofu-test` | `tests/system/pkinit/tofu.sh`: KDC-CA trust-on-first-use scenarios (happy path, denial, MITM, ML-DSA chain, tty prompt), with an HTML report | `build` |
 
 Dependencies mirror the workflow's `needs:` fields. When you ask for a job
@@ -102,7 +102,9 @@ CARGO_TARGET_DIR=/tmp/kurbu5-pkinit-target ./contrib/ci/local-ci.sh all
      a client certificate with a KRB5 principal SAN, all signed with
      `--key-type` and valid for one day;
    - writes `krb5.conf` and `kdc.conf` that load kurbu5-pkinit as the
-     `kdcpreauth`, `clpreauth` and `certauth` module;
+     `kdcpreauth`, `clpreauth` and `certauth` module, with
+     `pkinit_pqc_min_algorithm` set on both sides (ML-KEM-768 unless
+     `--pqc-min-algorithm` says otherwise);
    - creates the realm database, the client principal (no password, PKINIT
      only) and `WELLKNOWN/ANONYMOUS`;
    - starts `krb5kdc` listening only on a UNIX domain socket,
@@ -133,7 +135,7 @@ How the client trusts the KDC depends on the mode:
 | Option | Default | Description |
 | --- | --- | --- |
 | `--key-type TYPE` | `ec:P-256` | Algorithm of the CA, KDC and client certificates: `ec:P-256`, `ec:P-384`, `ec:P-521`, `rsa:2048`, `rsa:3072`, `rsa:4096`, `mldsa44`, `mldsa65`, `mldsa87`. This only decides what signs the certificates, not the key exchange. |
-| `--pqc-min-algorithm ALG` | unset | Switches the key exchange from DH/ECDH to ML-KEM and sets `pkinit_pqc_min_algorithm` on both sides. Values: `ML-KEM-512`, `ML-KEM-768`, `ML-KEM-1024`, `ML-KEM-768-X25519`, `ML-KEM-768-ECDH-P256`, `ML-KEM-1024-ECDH-P384`. |
+| `--pqc-min-algorithm ALG` | `ML-KEM-768` | Minimum ML-KEM algorithm for the key exchange, set as `pkinit_pqc_min_algorithm` on both sides: `ML-KEM-512`, `ML-KEM-768`, `ML-KEM-1024`, `ML-KEM-768-X25519`, `ML-KEM-768-ECDH-P256`, `ML-KEM-1024-ECDH-P384`. `none` selects classic DH/ECDH instead. |
 | `--realm REALM` | `PKINIT.TEST` | Realm name. In token mode, defaults to the realm in the token certificate's SAN. |
 | `--principal NAME` | `user` | Client principal. In token mode, defaults to the principal in the token certificate's SAN. |
 | `--no-tofu` | TOFU on | Skip the broker and give the client a static `pkinit_anchors`. |
@@ -142,9 +144,11 @@ How the client trusts the KDC depends on the mode:
 | `--client-ca FILE` | issuer found on the token | PEM of the CA that issued the token certificate. Token mode only. |
 | `--pkcs11-module FILE` | p11-kit proxy | PKCS#11 module to load through the OpenSSL pkcs11-provider. Token mode only. |
 
-`--key-type` and `--pqc-min-algorithm` are independent. `--key-type mldsa65`
-alone gives post-quantum certificates with a classical key exchange. Add
-`--pqc-min-algorithm` as well for a fully post-quantum exchange.
+The key exchange is post-quantum by default, whatever certificates
+`--key-type` produces: RSA and ECDSA certificates still get an ML-KEM
+exchange. `--key-type` and `--pqc-min-algorithm` are independent. Use
+`--pqc-min-algorithm none` only to look at a classic DH/ECDH exchange, the
+only kind MIT's own `pkinit.so` can negotiate.
 
 ### Inside the playground shell
 
@@ -218,20 +222,20 @@ for the life of the playground.
 ### Recipes
 
 ```sh
-# Defaults: ECDSA P-256 certificates, ECDH, TOFU via the broker
+# Defaults: ECDSA P-256 certificates, ML-KEM-768, TOFU via the broker
 ./contrib/ci/local-ci.sh interactive
 
-# Post-quantum certificates, classical key exchange
+# Fully post-quantum: ML-DSA certificates and ML-KEM key exchange
 ./contrib/ci/local-ci.sh interactive --key-type mldsa65
 
-# Fully post-quantum: ML-DSA certificates and ML-KEM key exchange
-./contrib/ci/local-ci.sh interactive --key-type mldsa65 --pqc-min-algorithm ML-KEM-768
+# Stronger ML-KEM floor
+./contrib/ci/local-ci.sh interactive --key-type mldsa87 --pqc-min-algorithm ML-KEM-1024
 
 # Hybrid KEM
 ./contrib/ci/local-ci.sh interactive --pqc-min-algorithm ML-KEM-768-X25519
 
-# Classic setup: RSA, static anchors, no broker
-./contrib/ci/local-ci.sh interactive --no-tofu --key-type rsa:2048
+# Classic setup: RSA, DH/ECDH, static anchors, no broker
+./contrib/ci/local-ci.sh interactive --no-tofu --key-type rsa:2048 --pqc-min-algorithm none
 
 # Force the trust prompt onto kinit's own terminal, even in a desktop session
 ./contrib/ci/local-ci.sh interactive --ui tty

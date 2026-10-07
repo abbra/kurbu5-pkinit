@@ -27,6 +27,12 @@ import time
 
 REALM = "PKINIT.TEST"
 
+# Key exchange: post-quantum (ML-KEM) by default, whatever the certificate
+# algorithm. CLASSIC_KEX ("none") selects classic DH/ECDH instead, which only
+# interop tests against MIT's own pkinit.so need, since it has no KEM support.
+DEFAULT_PQC_MIN_ALGORITHM = "ML-KEM-768"
+CLASSIC_KEX = "none"
+
 # The KDC listens on a UNIX domain socket (MIT krb5 1.22+) rather than a TCP/UDP
 # port, so any number of test realms can run side by side without port
 # allocation. sun_path holds 108 bytes including the terminating NUL.
@@ -223,7 +229,8 @@ def _certs_from_file(path):
 class PkinitRealm:
     def __init__(self, testdir=None, realm=None, kdc_socket=None,
                  kdc_plugin_so=None, client_plugin_so=None, principal=None,
-                 key_type="ec:P-256", pqc_min_algorithm=None,
+                 key_type="ec:P-256",
+                 pqc_min_algorithm=DEFAULT_PQC_MIN_ALGORITHM,
                  tofu_broker=None, client_token=None, client_ca=None,
                  pkcs11_module=None):
         # realm/principal are None by default so token mode can override them
@@ -232,6 +239,9 @@ class PkinitRealm:
         self.realm = realm if realm is not None else REALM
         self.principal = principal if principal is not None else "user"
         self.key_type = key_type
+        # None or CLASSIC_KEX: classic DH/ECDH, no pkinit_pqc_min_algorithm.
+        if pqc_min_algorithm == CLASSIC_KEX:
+            pqc_min_algorithm = None
         self.pqc_min_algorithm = pqc_min_algorithm
         # When set, the client krb5.conf enables trust-on-first-use of the KDC
         # CA via the broker at this socket path, omits the client's KDC-CA
@@ -883,8 +893,12 @@ def main():
     parser.add_argument("--key-type", default="ec:P-256",
                         choices=sorted(SUPPORTED_KEY_TYPES),
                         help="Certificate key type (default: ec:P-256)")
-    parser.add_argument("--pqc-min-algorithm", default=None,
-                        help="Minimum PQ algorithm (e.g. ML-KEM-768)")
+    parser.add_argument("--pqc-min-algorithm",
+                        default=DEFAULT_PQC_MIN_ALGORITHM,
+                        help="Minimum ML-KEM algorithm for the key exchange "
+                             f"(default: {DEFAULT_PQC_MIN_ALGORITHM}); "
+                             f"'{CLASSIC_KEX}' selects classic DH/ECDH, for "
+                             "interop with MIT's pkinit.so")
     parser.add_argument("--tofu-broker", default=None, metavar="SOCKET",
                         help="Enable KDC-CA trust-on-first-use: client consults "
                              "the broker at this Unix socket, has no static "
