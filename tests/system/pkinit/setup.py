@@ -241,11 +241,15 @@ class PkinitRealm:
                  key_type="ec:P-256",
                  pqc_min_algorithm=DEFAULT_PQC_MIN_ALGORITHM,
                  tofu_broker=None, client_token=None, client_ca=None,
-                 pkcs11_module=None):
+                 pkcs11_module=None, krb5_prefix=None):
         # realm/principal are None by default so token mode can override them
         # with values derived from the token certificate's KRB5 SAN before
         # any config is written.
         self.realm = realm if realm is not None else REALM
+        # An alternative MIT krb5 installation (e.g. a build carrying the
+        # draft-bokovoy-kitten-pkinit-pqc pkinit.so) whose KDC, admin tools,
+        # kinit, libraries and KDB/preauth plugins replace the system ones.
+        self.krb5_prefix = os.path.abspath(krb5_prefix) if krb5_prefix else None
         self.principal = principal if principal is not None else "user"
         self.key_type = key_type
         # None or CLASSIC_KEX: classic DH/ECDH, no pkinit_pqc_min_algorithm.
@@ -344,7 +348,28 @@ class PkinitRealm:
         # written by main(), so KDC and client traces never land in the
         # same file and interleave.
         e["KRB5_TRACE"] = self.kdc_trace
+        e.update(self.prefix_env())
         return e
+
+    def prefix_env(self):
+        """PATH / LD_LIBRARY_PATH selecting the --krb5-prefix installation
+        (empty without one). Also exported via the env-file, so kinit/klist
+        run from that installation too."""
+        if not self.krb5_prefix:
+            return {}
+        p = self.krb5_prefix
+        path = os.environ.get("PATH", "")
+        libs = os.environ.get("LD_LIBRARY_PATH", "")
+        return {
+            "PATH": f"{p}/sbin:{p}/bin" + (f":{path}" if path else ""),
+            "LD_LIBRARY_PATH": f"{p}/lib" + (f":{libs}" if libs else ""),
+        }
+
+    def _plugin_dir_candidates(self, kind, system_dirs):
+        """The --krb5-prefix plugin directory first, then the system ones."""
+        if self.krb5_prefix:
+            return [os.path.join(self.krb5_prefix, "lib", "krb5", "plugins", kind)]
+        return system_dirs
 
     # -- Client token identity (token mode) --
 
@@ -608,14 +633,13 @@ class PkinitRealm:
         os.makedirs(self.plugins_dir, exist_ok=True)
         self._link_system_preauth_plugins()
 
-    @staticmethod
-    def _find_system_preauth_dir():
-        candidates = [
+    def _find_system_preauth_dir(self):
+        candidates = self._plugin_dir_candidates("preauth", [
             "/usr/lib64/krb5/plugins/preauth",
             "/usr/lib/krb5/plugins/preauth",
             "/usr/lib/x86_64-linux-gnu/krb5/plugins/preauth",
             "/usr/lib/aarch64-linux-gnu/krb5/plugins/preauth",
-        ]
+        ])
         for d in candidates:
             if os.path.isdir(d):
                 return d
@@ -646,14 +670,13 @@ class PkinitRealm:
 
     # -- System KDB module detection --
 
-    @staticmethod
-    def _find_db_module_dir():
-        candidates = [
+    def _find_db_module_dir(self):
+        candidates = self._plugin_dir_candidates("kdb", [
             "/usr/lib64/krb5/plugins/kdb",
             "/usr/lib/krb5/plugins/kdb",
             "/usr/lib/x86_64-linux-gnu/krb5/plugins/kdb",
             "/usr/lib/aarch64-linux-gnu/krb5/plugins/kdb",
-        ]
+        ])
         for d in candidates:
             if os.path.isfile(os.path.join(d, "db2.so")):
                 return d
@@ -936,6 +959,12 @@ def main():
                              "certificate (adds a second pkinit_anchors "
                              "entry to the KDC). Defaults to the issuer "
                              "certificate on the token.")
+    parser.add_argument("--krb5-prefix", metavar="DIR",
+                        default=os.environ.get("KRB5_PREFIX") or None,
+                        help="Use the MIT krb5 installed under DIR (KDC, admin "
+                             "tools, kinit, libraries, KDB and preauth "
+                             "plugins) instead of the system one "
+                             "(default: $KRB5_PREFIX)")
     parser.add_argument("--pkcs11-module", metavar="FILE", default=None,
                         help="Path of the PKCS#11 module (e.g. a PKCS#11 "
                              "provider .so) pinned via pkcs11-module-path in "
@@ -961,6 +990,7 @@ def main():
         client_token=args.client_token,
         client_ca=args.client_ca,
         pkcs11_module=args.pkcs11_module,
+        krb5_prefix=args.krb5_prefix,
     )
     if realm.client_token:
         realm.load_client_token_identity()
@@ -991,6 +1021,8 @@ def main():
         if k.startswith("KRB5") and k != "KRB5_TRACE"
     )
     env_lines += f'\nexport KRB5_TRACE="{realm.client_trace}"'
+    for k, v in realm.prefix_env().items():
+        env_lines += f'\nexport {k}="{v}"'
     if realm.client_token:
         # Token mode: the plugin loads the identity from the PKCS#11 token at
         # runtime, so no cert/key file exports. OPENSSL_CONF is exported so
