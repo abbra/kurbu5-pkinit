@@ -2,6 +2,46 @@ use kurbu5_rs::Profile;
 use pkinit_core::config::{PkinitClientConfig, PkinitKdcConfig};
 use pkinit_core::constants::{DhGroup, KemAlgorithm};
 
+/// A relation whose value cannot be used. Key-exchange settings are
+/// security-relevant, so an unrecognized algorithm name is an error rather
+/// than silently ignored: a typo would otherwise disable ML-KEM.
+#[derive(Debug)]
+pub struct ConfigError(String);
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+const KEM_NAMES: &str = "ML-KEM-512, ML-KEM-768, ML-KEM-1024, ML-KEM-768-X25519, \
+                         ML-KEM-768-ECDH-P256, ML-KEM-1024-ECDH-P384";
+const COMPOSITE_KEM_NAMES: &str = "ML-KEM-768-X25519, ML-KEM-768-ECDH-P256, ML-KEM-1024-ECDH-P384";
+
+fn parse_kem_algorithm(key: &str, value: &str) -> Result<KemAlgorithm, ConfigError> {
+    KemAlgorithm::from_name(value).ok_or_else(|| {
+        ConfigError(format!(
+            "{key}: unknown KEM algorithm {value:?} (expected one of {KEM_NAMES})"
+        ))
+    })
+}
+
+fn parse_composite_kem_algorithms(
+    key: &str,
+    values: &[String],
+) -> Result<Vec<KemAlgorithm>, ConfigError> {
+    values
+        .iter()
+        .map(|v| match KemAlgorithm::from_name(v) {
+            Some(alg) if alg.is_composite() => Ok(alg),
+            _ => Err(ConfigError(format!(
+                "{key}: {v:?} is not a composite KEM algorithm \
+                 (expected one of {COMPOSITE_KEM_NAMES})"
+            ))),
+        })
+        .collect()
+}
+
 /// Reads PKINIT relations the way MIT krb5 does: a value under
 /// `[realms] <realm>` takes precedence over the same relation in the defaults
 /// section (`[libdefaults]` for the client, `[kdcdefaults]` for the KDC), and
@@ -74,7 +114,11 @@ impl Lookup<'_> {
     }
 }
 
-pub fn read_client_config(profile: &Profile, realm: Option<&str>, config: &mut PkinitClientConfig) {
+pub fn read_client_config(
+    profile: &Profile,
+    realm: Option<&str>,
+    config: &mut PkinitClientConfig,
+) -> Result<(), ConfigError> {
     let lookup = Lookup {
         profile,
         defaults: "libdefaults",
@@ -110,7 +154,7 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>, config: &mut P
     config.require_freshness =
         lookup.boolean("pkinit_require_freshness_token", config.require_freshness);
     if let Some(v) = lookup.string("pkinit_pqc_min_algorithm") {
-        config.kem_algorithm = KemAlgorithm::from_name(&v);
+        config.kem_algorithm = Some(parse_kem_algorithm("pkinit_pqc_min_algorithm", &v)?);
     }
     config.require_kem = lookup.boolean("pkinit_require_kem", config.require_kem);
     config.kdc_trust_tofu = lookup.boolean("pkinit_kdc_trust_tofu", config.kdc_trust_tofu);
@@ -122,9 +166,10 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>, config: &mut P
         .clamp(0, i32::MAX) as u32;
 
     config.dh_group = dh_group_from_min_bits(config.dh_min_bits);
+    Ok(())
 }
 
-pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
+pub fn read_kdc_config(profile: &Profile, realm: &str) -> Result<PkinitKdcConfig, ConfigError> {
     let mut config = PkinitKdcConfig::default();
     let lookup = Lookup {
         profile,
@@ -160,20 +205,17 @@ pub fn read_kdc_config(profile: &Profile, realm: &str) -> PkinitKdcConfig {
     if let Some(indicators) = lookup.values("pkinit_indicator") {
         config.auth_indicators = indicators;
     }
-    if let Some(v) = lookup.string("pkinit_pqc_min_algorithm")
-        && let Some(alg) = KemAlgorithm::from_name(&v)
-    {
-        config.supported_kem_algorithms = alg.algorithms_at_or_above();
+    if let Some(v) = lookup.string("pkinit_pqc_min_algorithm") {
+        config.supported_kem_algorithms =
+            parse_kem_algorithm("pkinit_pqc_min_algorithm", &v)?.algorithms_at_or_above();
     }
     if let Some(names) = lookup.values("pkinit_pqc_composite_algorithms") {
-        config.supported_composite_kem_algorithms = names
-            .iter()
-            .filter_map(|n| KemAlgorithm::from_name(n))
-            .collect();
+        config.supported_composite_kem_algorithms =
+            parse_composite_kem_algorithms("pkinit_pqc_composite_algorithms", &names)?;
     }
     config.require_kem = lookup.boolean("pkinit_require_kem", config.require_kem);
 
-    config
+    Ok(config)
 }
 
 fn apply_eku_checking(value: &str, require_eku: &mut bool, accept_secondary: &mut bool) {
@@ -272,7 +314,7 @@ mod tests {
             ],
             |profile| {
                 let mut cfg = PkinitClientConfig::default();
-                read_client_config(profile, Some("PKINIT.TEST"), &mut cfg);
+                read_client_config(profile, Some("PKINIT.TEST"), &mut cfg).unwrap();
                 assert_eq!(
                     cfg.identity.as_deref(),
                     Some("PKCS11:token=SmokeToken;object=mykey;type=private")
@@ -305,7 +347,7 @@ mod tests {
             ],
             |profile| {
                 let mut cfg = PkinitClientConfig::default();
-                read_client_config(profile, Some("PKINIT.TEST"), &mut cfg);
+                read_client_config(profile, Some("PKINIT.TEST"), &mut cfg).unwrap();
                 assert_eq!(cfg.kem_algorithm, Some(KemAlgorithm::MlKem1024));
                 assert!(cfg.require_kem);
                 assert!(cfg.kdc_trust_tofu);
@@ -341,7 +383,7 @@ mod tests {
         ];
         with_profile(&lines, |profile| {
             let mut cfg = PkinitClientConfig::default();
-            read_client_config(profile, Some("PKINIT.TEST"), &mut cfg);
+            read_client_config(profile, Some("PKINIT.TEST"), &mut cfg).unwrap();
             assert_eq!(cfg.identity.as_deref(), Some("FILE:/realm.pem,/realm.key"));
             assert_eq!(cfg.anchors, vec!["FILE:/realm-ca.pem"]);
             assert!(!cfg.require_kem);
@@ -351,7 +393,7 @@ mod tests {
                 identity: Some("FILE:/cli.pem,/cli.key".into()),
                 ..Default::default()
             };
-            read_client_config(profile, Some("PKINIT.TEST"), &mut preset);
+            read_client_config(profile, Some("PKINIT.TEST"), &mut preset).unwrap();
             assert_eq!(preset.identity.as_deref(), Some("FILE:/cli.pem,/cli.key"));
         });
     }
@@ -377,7 +419,7 @@ mod tests {
                 "    }",
             ],
             |profile| {
-                let cfg = read_kdc_config(profile, "PKINIT.TEST");
+                let cfg = read_kdc_config(profile, "PKINIT.TEST").unwrap();
                 assert!(cfg.require_kem);
                 assert_eq!(
                     cfg.supported_kem_algorithms,
@@ -408,10 +450,83 @@ mod tests {
                 "    }",
             ],
             |profile| {
-                let cfg = read_kdc_config(profile, "PKINIT.TEST");
+                let cfg = read_kdc_config(profile, "PKINIT.TEST").unwrap();
                 assert_eq!(cfg.identity.as_deref(), Some("FILE:/realm.pem,/realm.key"));
                 assert!(!cfg.require_kem);
             },
         );
+    }
+
+    /// A misspelled algorithm must fail loudly: silently dropping it used to
+    /// leave the client on classic DH/ECDH.
+    #[test]
+    fn client_unknown_pqc_algorithm_is_an_error() {
+        with_profile(
+            &[
+                "[libdefaults]",
+                "    default_realm = PKINIT.TEST",
+                "    pkinit_pqc_min_algorithm = ML-KEM-786",
+            ],
+            |profile| {
+                let mut cfg = PkinitClientConfig::default();
+                let err = read_client_config(profile, Some("PKINIT.TEST"), &mut cfg).unwrap_err();
+                assert!(err.to_string().contains("ML-KEM-786"), "{err}");
+            },
+        );
+    }
+
+    #[test]
+    fn kdc_unknown_pqc_algorithm_is_an_error() {
+        with_profile(
+            &[
+                "[realms]",
+                "    PKINIT.TEST = {",
+                "        pkinit_pqc_min_algorithm = mlkem",
+                "    }",
+            ],
+            |profile| {
+                let err = read_kdc_config(profile, "PKINIT.TEST").unwrap_err();
+                assert!(
+                    err.to_string().contains("pkinit_pqc_min_algorithm"),
+                    "{err}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn kdc_composite_algorithms_must_be_composite() {
+        let base = ["[realms]", "    PKINIT.TEST = {"];
+        with_profile(
+            &[
+                &base[..],
+                &[
+                    "        pkinit_pqc_composite_algorithms = ML-KEM-768-X25519",
+                    "        pkinit_pqc_composite_algorithms = ML-KEM-1024-ECDH-P384",
+                    "    }",
+                ],
+            ]
+            .concat(),
+            |profile| {
+                let cfg = read_kdc_config(profile, "PKINIT.TEST").unwrap();
+                assert_eq!(
+                    cfg.supported_composite_kem_algorithms,
+                    vec![
+                        KemAlgorithm::MlKem768X25519,
+                        KemAlgorithm::MlKem1024EcdhP384
+                    ]
+                );
+            },
+        );
+        for bad in ["ML-KEM-768", "X25519"] {
+            let line = format!("        pkinit_pqc_composite_algorithms = {bad}");
+            with_profile(
+                &[&base[..], &[line.as_str(), "    }"]].concat(),
+                |profile| {
+                    let err = read_kdc_config(profile, "PKINIT.TEST").unwrap_err();
+                    assert!(err.to_string().contains(bad), "{err}");
+                },
+            );
+        }
     }
 }

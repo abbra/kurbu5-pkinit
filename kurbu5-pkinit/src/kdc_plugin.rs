@@ -41,7 +41,15 @@ impl KdcpreauthModule for PkinitKdc {
         let realm = realmnames.first().ok_or(Krb5Error::Custom(libc::EINVAL))?;
         pkinit_trace!(ctx, "PKINIT server initializing realm {}", realm);
         let profile = kurbu5_rs::Profile::from_context(ctx)?;
-        let config = profile::read_kdc_config(&profile, realm);
+        let config = profile::read_kdc_config(&profile, realm).map_err(|e| {
+            pkinit_trace!(
+                ctx,
+                "PKINIT server configuration error for realm {}: {}",
+                realm,
+                e
+            );
+            Krb5Error::Custom(libc::EINVAL)
+        })?;
 
         let identity_str = config.identity.as_deref().ok_or(Krb5Error::NoHandle)?;
 
@@ -386,7 +394,15 @@ impl CertauthModule for PkinitCertauth {
     fn init_module_ex(ctx: &PluginContext<'_>, realms: &[&str]) -> Result<Self, Krb5Error> {
         let allow_upn = if let Some(realm) = realms.first() {
             let prof = kurbu5_rs::Profile::from_context(ctx)?;
-            let config = profile::read_kdc_config(&prof, realm);
+            let config = profile::read_kdc_config(&prof, realm).map_err(|e| {
+                pkinit_trace!(
+                    ctx,
+                    "PKINIT certauth configuration error for realm {}: {}",
+                    realm,
+                    e
+                );
+                Krb5Error::Custom(libc::EINVAL)
+            })?;
             config.allow_upn
         } else {
             false
