@@ -543,6 +543,9 @@ impl PkinitClientState {
     ) -> Result<DerivedKey, PkinitError> {
         use crate::kem_types::{KdcKemInfo, KemRepInfo, decode_kem_rep_content};
 
+        // {{sec-client-response}}: the decapsulation key leaves the state
+        // here, so every return below -- abort or success -- drops it, and it
+        // is never retained for a later exchange.
         let kem_key = self.kem_key.take().ok_or_else(|| {
             PkinitError::KemDecapFailed("no KEM key generated for this exchange".into())
         })?;
@@ -632,6 +635,9 @@ impl PkinitClientState {
             });
         }
 
+        // `decapsulate` consumes the key pair: dk is freed (and erased) as
+        // soon as decapsulation returns, before the KDF runs
+        // ({{sec-dk-hygiene}}).
         let shared_secret = kem_key.decapsulate(kemct)?;
 
         kdf::pkinit_kem_kdf(
@@ -1348,6 +1354,42 @@ mod tests {
             .build_as_req(1, 1719600000, 0, b"mock-req-body")
             .unwrap_err();
         assert!(matches!(err, PkinitError::DowngradeRejected(_)));
+    }
+
+    #[test]
+    fn kem_decapsulation_key_is_not_retained_after_an_abort() {
+        // {{sec-client-response}}: on any abort the client erases dk; it
+        // must not survive in the state for a later exchange.
+        let mut state = client_with_floor(Some(KemAlgorithm::MlKem768));
+        state.kem_key = Some(KemKeyPair::generate(KemAlgorithm::MlKem768).unwrap());
+        let params = AsRepParams {
+            nonce: 1,
+            enctype: 18,
+            as_req_der: b"as-req",
+            pa_rep_raw: b"",
+            client_name: "user@EXAMPLE.COM",
+            server_name: "krbtgt/EXAMPLE.COM@EXAMPLE.COM",
+        };
+        struct NoO2K;
+        impl OctetString2Key for NoO2K {
+            fn random_to_key(
+                &self,
+                _: i32,
+                _: &[u8],
+            ) -> Result<native_ossl::util::SecretBuf, PkinitError> {
+                unreachable!()
+            }
+            fn random_length(&self, _: i32) -> Result<usize, PkinitError> {
+                unreachable!()
+            }
+            fn key_length(&self, _: i32) -> Result<usize, PkinitError> {
+                unreachable!()
+            }
+        }
+        // A kemInfo [2] wrapper around garbage: aborts while decoding.
+        let bogus_rep = [0xA2, 0x03, 0x01, 0x02, 0x03];
+        assert!(state.process_kem_rep(&bogus_rep, &params, &NoO2K).is_err());
+        assert!(state.kem_key.is_none());
     }
 
     #[test]
