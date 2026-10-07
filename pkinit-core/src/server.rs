@@ -517,13 +517,26 @@ fn group_algorithm_identifier(
     })
 }
 
+/// The KEM algorithm of a `clientPublicValue`, or `None` for a DH/ECDH (or
+/// unrecognized) key. A KEM key must have absent algorithm parameters
+/// ({{sec-alg-id-encoding}}); one that carries them is not accepted
+/// (`KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED`).
 fn detect_spki_algorithm(spki_der: &[u8]) -> Result<Option<KemAlgorithm>, PkinitError> {
     let spki: synta_krb5::kerberos_v5_pkinit_agility::SubjectPublicKeyInfo<'_> =
         synta::Decoder::new(spki_der, synta::Encoding::Der)
             .decode()
             .map_err(asn1_err("decode SPKI"))?;
     let oid_components = spki.algorithm.algorithm.components();
-    Ok(KemAlgorithm::from_oid(oid_components))
+    let Some(kem_alg) = KemAlgorithm::from_oid(oid_components) else {
+        return Ok(None);
+    };
+    if spki.algorithm.parameters.is_some() {
+        return Err(PkinitError::KemAlgorithmNotSupported(format!(
+            "{} key with algorithm parameters (they must be absent)",
+            kem_alg.parameter_set_name()
+        )));
+    }
+    Ok(Some(kem_alg))
 }
 
 fn extract_pub_key_bits(spki_der: &[u8]) -> Result<Vec<u8>, PkinitError> {
@@ -705,6 +718,33 @@ mod tests {
         trust_store.add_anchor(ca_cert_der);
 
         (client_id, kdc_id, trust_store)
+    }
+
+    #[test]
+    fn kem_client_public_value_must_not_carry_parameters() {
+        use crate::error::KemErrorClass;
+
+        let spki_der = crate::crypto::kem::KemKeyPair::generate(KemAlgorithm::MlKem768)
+            .unwrap()
+            .public_key_spki_der()
+            .unwrap();
+        assert_eq!(
+            detect_spki_algorithm(&spki_der).unwrap(),
+            Some(KemAlgorithm::MlKem768)
+        );
+
+        let mut spki: synta_krb5::kerberos_v5_pkinit_agility::SubjectPublicKeyInfo<'_> =
+            synta::Decoder::new(&spki_der, synta::Encoding::Der)
+                .decode()
+                .unwrap();
+        spki.algorithm.parameters = Some(synta::Element::Null(synta::Null));
+        let with_params = spki.to_der().unwrap();
+        let err = detect_spki_algorithm(&with_params).unwrap_err();
+        assert_eq!(
+            err.kem_error_class(),
+            KemErrorClass::EphemeralKeyParamsNotAccepted,
+            "{err}"
+        );
     }
 
     #[test]
