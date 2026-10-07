@@ -323,6 +323,20 @@ pub fn extract_bare_content(content_info_der: &[u8]) -> Result<(Vec<u8>, Vec<u32
     Ok((content.as_bytes().to_vec(), content_type))
 }
 
+/// The digest algorithm for a signer's CMS signed attributes, chosen from
+/// the signing certificate's own key ({{RFC9882}} Section 3.3, required by
+/// draft-bokovoy-kitten-pkinit-pqc-02 for ML-DSA signers): SHA-512 for
+/// ML-DSA and composite ML-DSA -- mandatory to support and suitable for
+/// every ML-DSA parameter set, whereas SHA-256 only matches ML-DSA-44 --
+/// and SHA-256 for classical keys.
+pub fn digest_for_signer(signer_cert_der: &[u8]) -> &'static str {
+    if crate::client::is_pq_signing_certificate(signer_cert_der) {
+        "sha512"
+    } else {
+        "sha256"
+    }
+}
+
 /// Create a CMS SignedData wrapped in ContentInfo with no signers (anonymous PKINIT).
 pub fn create_unsigned_data(content: &[u8], content_oid: &[u32]) -> Result<Vec<u8>, PkinitError> {
     let e_content_type = ObjectIdentifier::new(content_oid)
@@ -657,6 +671,37 @@ mod tests {
 
         let verified = verify_signed_data(&ci_der).expect("verify sha384");
         assert_eq!(verified.content, content);
+    }
+
+    #[test]
+    fn ml_dsa_signers_use_sha512_digest() {
+        let (pq_cert, pq_key) = crate::test_support::build_pq_signing_identity();
+        let (ec_cert, _) = crate::test_support::build_classical_signing_identity();
+        assert_eq!(digest_for_signer(&pq_cert), "sha512");
+        assert_eq!(digest_for_signer(&ec_cert), "sha256");
+
+        // An ML-DSA-65 SignedData carries id-sha512 as its digestAlgorithm
+        // and still verifies.
+        let key = synta_certificate::crypto::BackendPrivateKey::from_pkcs8_der_unchecked(pq_key);
+        let ci_der = create_signed_data(
+            b"content",
+            &[1, 2, 3, 4],
+            &key,
+            &pq_cert,
+            &[],
+            digest_for_signer(&pq_cert),
+        )
+        .unwrap();
+        verify_signed_data(&ci_der).expect("verify ML-DSA SignedData");
+        const ID_SHA512_DER: &[u8] = &[
+            0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03,
+        ];
+        assert!(
+            ci_der
+                .windows(ID_SHA512_DER.len())
+                .any(|w| w == ID_SHA512_DER),
+            "id-sha512 digestAlgorithm expected"
+        );
     }
 
     #[test]

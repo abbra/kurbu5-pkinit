@@ -336,7 +336,7 @@ impl PkinitKdcState {
             signer_key,
             &self.identity.cert_der,
             &extra_certs,
-            "sha256",
+            cms::digest_for_signer(&self.identity.cert_der),
         )?;
 
         let kem_rep_info = KemRepInfo {
@@ -399,7 +399,7 @@ impl PkinitKdcState {
             signer_key,
             &self.identity.cert_der,
             &extra_certs,
-            "sha256",
+            cms::digest_for_signer(&self.identity.cert_der),
         )?;
 
         let server_dh_nonce = native_ossl::rand::Rand::bytes(32)

@@ -413,7 +413,7 @@ impl PkinitClientState {
                 signer_key,
                 &self.identity.cert_der,
                 &extra_certs,
-                "sha256",
+                cms::digest_for_signer(&self.identity.cert_der),
             )?
         };
 
