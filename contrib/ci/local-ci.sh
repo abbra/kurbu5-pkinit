@@ -566,6 +566,7 @@ run_interactive_playground() {
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo "  realm:          $PKINIT_REALM"
     echo "  principal:      $PKINIT_PRINCIPAL@$PKINIT_REALM"
+    echo "  KDC socket:     $PKINIT_KDC_SOCKET"
     if [[ -n "$token" ]]; then
         echo "  client identity: PKCS#11 token (${token%%\?*})"
         echo "  cert algorithm:   $key_type (CA/KDC cert signing; client cert is on the token)"

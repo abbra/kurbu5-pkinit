@@ -30,7 +30,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 REALM="${REALM:-PKINIT.TEST}"
 PRINCIPAL="${PRINCIPAL:-user}"
-PORTBASE="${KDC_PORTBASE:-63200}"
 REPORT_HTML="${TOFU_REPORT:-$REPO_ROOT/pkinit-tofu-report.html}"
 
 while [[ $# -gt 0 ]]; do
@@ -107,8 +106,6 @@ run_scenario() {
     local broker_log="$dir/broker.log"
     local testdir="$WORK/$name-kdc"
     local env_file="$testdir/env.sh"
-    local port=$((PORTBASE))
-    PORTBASE=$((PORTBASE + 10))
 
     echo
     echo "=== Scenario: $name ($title) ==="
@@ -140,7 +137,6 @@ run_scenario() {
     # Start the ephemeral KDC with a TOFU client configuration.
     python3 "$SCRIPT_DIR/setup.py" \
         --testdir "$testdir" \
-        --portbase "$port" \
         --realm "$REALM" \
         --principal "$PRINCIPAL" \
         --plugin-so "$PLUGIN_SO" \

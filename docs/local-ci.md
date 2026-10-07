@@ -30,7 +30,7 @@ The script needs bash 4 or later and checks for its tools at startup, printing
 | --- | --- |
 | `cargo` | everything |
 | `rustfmt`, `clippy` | the `fmt` and `clippy` jobs (`rustup component add rustfmt clippy`) |
-| `krb5kdc`, `kinit`, `kadmin.local` | `system-test`, `tofu-test`, `interactive` (Fedora: `krb5-server`, `krb5-workstation`) |
+| `krb5kdc`, `kinit`, `kadmin.local` (MIT krb5 1.22 or later) | `system-test`, `tofu-test`, `interactive` (Fedora: `krb5-server`, `krb5-workstation`) |
 | `openssl` | `system-test`, `tofu-test`, `interactive` |
 | `python3` | `system-test`, `tofu-test`, `interactive` |
 | `valgrind` | `--valgrind` only |
@@ -105,7 +105,10 @@ CARGO_TARGET_DIR=/tmp/kurbu5-pkinit-target ./contrib/ci/local-ci.sh all
      `kdcpreauth`, `clpreauth` and `certauth` module;
    - creates the realm database, the client principal (no password, PKINIT
      only) and `WELLKNOWN/ANONYMOUS`;
-   - starts `krb5kdc` on `127.0.0.1:63100` (UDP and TCP);
+   - starts `krb5kdc` listening only on a UNIX domain socket,
+     `/tmp/pkinit-kdc-XXXXXXXX/kdc.sock`, and points the realm's `kdc` at it
+     (MIT krb5 1.22+). No TCP or UDP port is opened, so any number of
+     playgrounds and test runs can coexist on one machine;
    - writes an environment file that the script sources.
 5. Prints a summary of the configuration and some commands to try, then starts
    your `$SHELL` with the prompt `[pkinit-playground] \W $`.
@@ -155,6 +158,7 @@ The environment file exports:
 | `KRB5_TRACE` | `<testdir>/client-trace.log`, the client-side libkrb5 and plugin trace |
 | `PKINIT_REALM`, `PKINIT_PRINCIPAL` | realm and client principal |
 | `PKINIT_CA_CERT` | the test CA certificate |
+| `PKINIT_KDC_SOCKET` | the UNIX socket the KDC listens on |
 | `PKINIT_CLIENT_CERT`, `PKINIT_CLIENT_KEY` | the generated client certificate and key (file mode) |
 | `PKINIT_CLIENT_IDENTITY`, `OPENSSL_CONF` | the token URI and the OpenSSL config that loads the pkcs11-provider (token mode) |
 | `SETUP_PID` | PID of the `setup.py` process that owns the KDC |
@@ -289,9 +293,9 @@ certificate's algorithm is whatever is on the token.
 
 ### Troubleshooting
 
-- **"KDC did not become ready"**: the script prints `kdc.log`. Port 63100 is
-  fixed, so a second playground (or a `system-test` run) on the same machine
-  will collide with the first.
+- **"KDC did not become ready"**: the script prints `kdc.log`. Check that
+  the installed MIT krb5 is 1.22 or later: earlier releases cannot listen on
+  a UNIX domain socket, so `krb5kdc` fails while setting up the network.
 - **`kinit` fails after you deny or ignore the prompt**: that is expected.
   TOFU fails closed when you deny, when the prompt times out, or when the
   broker cannot be reached. Exit and start the playground again to begin with

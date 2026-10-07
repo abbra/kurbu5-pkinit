@@ -17,6 +17,7 @@ Usage:
 
 import atexit
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -25,7 +26,11 @@ import textwrap
 import time
 
 REALM = "PKINIT.TEST"
-PORTBASE = 63100
+
+# The KDC listens on a UNIX domain socket (MIT krb5 1.22+) rather than a TCP/UDP
+# port, so any number of test realms can run side by side without port
+# allocation. sun_path holds 108 bytes including the terminating NUL.
+UNIX_PATH_MAX = 107
 
 
 SUPPORTED_KEY_TYPES = {
@@ -72,6 +77,15 @@ PKCS11_MODULE_PATHS = (
     "/usr/lib/s390x-linux-gnu/pkcs11/p11-kit-proxy.so",
     "/usr/lib/pkcs11/p11-kit-proxy.so",
 )
+
+
+def _short_tempdir(prefix):
+    """Create a private temporary directory whose path leaves room for a
+    socket name within sun_path: $TMPDIR when it is short enough, else /tmp."""
+    base = tempfile.gettempdir()
+    if len(os.fsencode(base)) > 64:
+        base = "/tmp"
+    return tempfile.mkdtemp(prefix=prefix, dir=base)
 
 
 def first_existing(paths):
@@ -207,7 +221,7 @@ def _certs_from_file(path):
 
 
 class PkinitRealm:
-    def __init__(self, testdir=None, realm=None, portbase=PORTBASE,
+    def __init__(self, testdir=None, realm=None, kdc_socket=None,
                  kdc_plugin_so=None, client_plugin_so=None, principal=None,
                  key_type="ec:P-256", pqc_min_algorithm=None,
                  tofu_broker=None, client_token=None, client_ca=None,
@@ -216,7 +230,6 @@ class PkinitRealm:
         # with values derived from the token certificate's KRB5 SAN before
         # any config is written.
         self.realm = realm if realm is not None else REALM
-        self.portbase = portbase
         self.principal = principal if principal is not None else "user"
         self.key_type = key_type
         self.pqc_min_algorithm = pqc_min_algorithm
@@ -279,6 +292,23 @@ class PkinitRealm:
         self.client_key = os.path.join(self.certs_dir, "client-key.pem")
 
         os.makedirs(self.testdir, exist_ok=True)
+
+        # KDC socket: an explicit path, or kdc.sock in a fresh private
+        # directory under the temp dir (kept short for sun_path; testdir may
+        # be arbitrarily deep). The directory is removed by stop(), or at exit
+        # if the KDC never started.
+        self._kdc_socket_dir = None
+        if kdc_socket is None:
+            self._kdc_socket_dir = _short_tempdir("pkinit-kdc-")
+            atexit.register(shutil.rmtree, self._kdc_socket_dir, True)
+            kdc_socket = os.path.join(self._kdc_socket_dir, "kdc.sock")
+        self.kdc_socket = os.path.abspath(kdc_socket)
+        if len(os.fsencode(self.kdc_socket)) > UNIX_PATH_MAX:
+            raise ValueError(
+                f"KDC socket path is too long for a UNIX domain socket "
+                f"({len(os.fsencode(self.kdc_socket))} > {UNIX_PATH_MAX} bytes): "
+                f"{self.kdc_socket}"
+            )
 
     @property
     def env(self):
@@ -668,8 +698,7 @@ class PkinitRealm:
 
             [realms]
                 {self.realm} = {{
-                    kdc = 127.0.0.1:{self.portbase}
-                    admin_server = 127.0.0.1:{self.portbase + 1}
+                    kdc = {self.kdc_socket}
                     {client_pkinit}
                 }}
 
@@ -697,10 +726,12 @@ class PkinitRealm:
                 f"\n                    pkinit_anchors = FILE:{self.client_token_anchor}"
             )
 
+        # A UNIX socket path is accepted in kdc_listen (krb5kdc serves it as a
+        # stream socket) but rejected in kdc_tcp_listen, which is disabled.
         kdc = textwrap.dedent(f"""\
             [kdcdefaults]
-                kdc_ports = {self.portbase}
-                kdc_tcp_ports = {self.portbase}
+                kdc_listen = {self.kdc_socket}
+                kdc_tcp_listen = ""
 
             [dbmodules]
                 db_module_dir = {db_module_dir}
@@ -714,8 +745,8 @@ class PkinitRealm:
                     database_module = db
                     acl_file = {self.acl_file}
                     key_stash_file = {self.stash}
-                    kdc_ports = {self.portbase}
-                    kdc_tcp_ports = {self.portbase}
+                    kdc_listen = {self.kdc_socket}
+                    kdc_tcp_listen = ""
                     max_life = 1h
                     max_renewable_life = 24h
                     supported_enctypes = {" ".join(f"{e}:normal" for e in ENCTYPES)}
@@ -775,11 +806,11 @@ class PkinitRealm:
             ["krb5kdc", "-n", "-r", self.realm],
             env=self.env, stdout=log_fd, stderr=log_fd,
         )
-        self._wait_for_kdc()
         atexit.register(self.stop)
+        self._wait_for_kdc()
         print(
             f"[setup] KDC started (pid {self._kdc_proc.pid}) "
-            f"listening on port {self.portbase}",
+            f"listening on {self.kdc_socket}",
             file=sys.stderr,
         )
 
@@ -792,9 +823,9 @@ class PkinitRealm:
                     "krb5kdc exited immediately; check " + self.kdc_log
                 )
             try:
-                with socket.create_connection(
-                    ("127.0.0.1", self.portbase), timeout=0.2
-                ):
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.2)
+                    s.connect(self.kdc_socket)
                     return
             except OSError:
                 time.sleep(0.1)
@@ -809,6 +840,9 @@ class PkinitRealm:
                 self._kdc_proc.kill()
             print("[setup] KDC stopped", file=sys.stderr)
         self._kdc_proc = None
+        if self._kdc_socket_dir:
+            shutil.rmtree(self._kdc_socket_dir, ignore_errors=True)
+            self._kdc_socket_dir = None
 
     # -- Principal management --
 
@@ -831,7 +865,10 @@ def main():
     parser.add_argument("--realm", default=None,
                         help=f"Kerberos realm (default: {REALM}; in token mode "
                              "derived from the token cert's KRB5 SAN)")
-    parser.add_argument("--portbase", type=int, default=PORTBASE)
+    parser.add_argument("--kdc-socket", metavar="PATH", default=None,
+                        help="UNIX domain socket for the KDC to listen on "
+                             "(default: kdc.sock in a fresh short temporary "
+                             "directory, removed on exit)")
     parser.add_argument("--plugin-so",
                         help="Path to plugin .so (sets both KDC and client)")
     parser.add_argument("--kdc-plugin-so",
@@ -880,7 +917,7 @@ def main():
     realm = PkinitRealm(
         testdir=args.testdir,
         realm=args.realm,
-        portbase=args.portbase,
+        kdc_socket=args.kdc_socket,
         kdc_plugin_so=kdc_so,
         client_plugin_so=client_so,
         principal=args.principal,
@@ -932,6 +969,7 @@ def main():
     env_lines += f'\nexport PKINIT_CA_CERT="{realm.ca_cert}"'
     env_lines += f'\nexport PKINIT_REALM="{realm.realm}"'
     env_lines += f'\nexport PKINIT_PRINCIPAL="{realm.principal}"'
+    env_lines += f'\nexport PKINIT_KDC_SOCKET="{realm.kdc_socket}"'
     env_lines += f'\nexport SETUP_PID="{os.getpid()}"'
 
     if args.env_file:

@@ -18,7 +18,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-KDC_PORTBASE="${KDC_PORTBASE:-63100}"
 REALM="${REALM:-PKINIT.TEST}"
 PRINCIPAL="${PRINCIPAL:-user}"
 MIT_PKINIT_SO="${MIT_PKINIT_SO:-/usr/lib64/krb5/plugins/preauth/pkinit.so}"
@@ -134,8 +133,7 @@ fi
 # -- Per-combo test runner --
 
 run_combo() {
-    local combo="$1" kdc_so="$2" client_so="$3" port_offset="$4"
-    local port=$((KDC_PORTBASE + port_offset))
+    local combo="$1" kdc_so="$2" client_so="$3"
     local TESTDIR
     TESTDIR="$(mktemp -d /tmp/pkinit-test-${combo}.XXXXXXXXXX)"
     local ENV_FILE="$TESTDIR/env.sh"
@@ -154,7 +152,6 @@ run_combo() {
     # Start ephemeral KDC
     python3 "$SCRIPT_DIR/setup.py" \
         --testdir "$TESTDIR/kdc" \
-        --portbase "$port" \
         --realm "$REALM" \
         --principal "$PRINCIPAL" \
         --kdc-plugin-so "$kdc_so" \
@@ -258,15 +255,14 @@ run_combo() {
 
 # -- Run selected combos --
 
-COMBO_INDEX=0
 for combo in "${COMBOS[@]}"; do
     case "$combo" in
         us-us)
-            run_combo "$combo" "$PLUGIN_SO" "$PLUGIN_SO" $((COMBO_INDEX * 10))
+            run_combo "$combo" "$PLUGIN_SO" "$PLUGIN_SO"
             ;;
         us-mit)
             if $HAS_MIT_PKINIT; then
-                run_combo "$combo" "$PLUGIN_SO" "$MIT_PKINIT_SO" $((COMBO_INDEX * 10))
+                run_combo "$combo" "$PLUGIN_SO" "$MIT_PKINIT_SO"
             else
                 echo
                 echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
@@ -278,7 +274,7 @@ for combo in "${COMBOS[@]}"; do
             ;;
         mit-us)
             if $HAS_MIT_PKINIT; then
-                run_combo "$combo" "$MIT_PKINIT_SO" "$PLUGIN_SO" $((COMBO_INDEX * 10))
+                run_combo "$combo" "$MIT_PKINIT_SO" "$PLUGIN_SO"
             else
                 echo
                 echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
@@ -290,7 +286,7 @@ for combo in "${COMBOS[@]}"; do
             ;;
         mit-mit)
             if $HAS_MIT_PKINIT; then
-                run_combo "$combo" "$MIT_PKINIT_SO" "$MIT_PKINIT_SO" $((COMBO_INDEX * 10))
+                run_combo "$combo" "$MIT_PKINIT_SO" "$MIT_PKINIT_SO"
             else
                 echo
                 echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
@@ -306,7 +302,6 @@ for combo in "${COMBOS[@]}"; do
             exit 1
             ;;
     esac
-    COMBO_INDEX=$((COMBO_INDEX + 1))
 done
 
 # -- Summary --
