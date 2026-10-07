@@ -171,6 +171,8 @@ run_combo() {
             report "$combo" "klist TGT" "FAIL"
             report "$combo" "anonymous kinit" "FAIL"
             report "$combo" "anonymous TGT" "FAIL"
+        report "$combo" "principal binding" "FAIL"
+            report "$combo" "principal binding" "FAIL"
             return
         fi
         sleep 0.5
@@ -182,6 +184,7 @@ run_combo() {
         report "$combo" "klist TGT" "FAIL"
         report "$combo" "anonymous kinit" "FAIL"
         report "$combo" "anonymous TGT" "FAIL"
+        report "$combo" "principal binding" "FAIL"
         return
     fi
 
@@ -224,6 +227,22 @@ run_combo() {
     else
         report "$combo" "anonymous TGT not found" "FAIL"
         echo "$ANON_KLIST"
+    fi
+
+    # Test 5: The KDC must bind the client certificate to the requested
+    # principal (RFC 4556 3.2.2): user's certificate must not get a ticket
+    # for another principal that exists in the database.
+    OTHER_PRINCIPAL="other"
+    OTHER_CCACHE="FILE:$TESTDIR/ccache-other"
+    KRB5_TRACE=/dev/null kadmin.local \
+        -q "addprinc -nokey ${OTHER_PRINCIPAL}@${PKINIT_REALM}" >/dev/null 2>&1 || true
+    if KRB5_CONFIG="$KRB5_CONFIG" \
+       KRB5CCNAME="$OTHER_CCACHE" \
+       kinit -X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}" \
+             "${OTHER_PRINCIPAL}@${PKINIT_REALM}" </dev/null >/dev/null 2>&1; then
+        report "$combo" "certificate accepted for another principal" "FAIL"
+    else
+        report "$combo" "certificate rejected for another principal" "PASS"
     fi
 
     # Trace files are always collected by setup.py, regardless of
@@ -271,6 +290,7 @@ for combo in "${COMBOS[@]}"; do
                 report "$combo" "klist" "SKIP"
                 report "$combo" "anonymous kinit" "SKIP"
                 report "$combo" "anonymous TGT" "SKIP"
+                report "$combo" "principal binding" "SKIP"
             fi
             ;;
         mit-us)
@@ -283,6 +303,7 @@ for combo in "${COMBOS[@]}"; do
                 report "$combo" "klist" "SKIP"
                 report "$combo" "anonymous kinit" "SKIP"
                 report "$combo" "anonymous TGT" "SKIP"
+                report "$combo" "principal binding" "SKIP"
             fi
             ;;
         mit-mit)
@@ -295,6 +316,7 @@ for combo in "${COMBOS[@]}"; do
                 report "$combo" "klist" "SKIP"
                 report "$combo" "anonymous kinit" "SKIP"
                 report "$combo" "anonymous TGT" "SKIP"
+                report "$combo" "principal binding" "SKIP"
             fi
             ;;
         *)
