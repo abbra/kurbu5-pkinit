@@ -120,6 +120,15 @@ pub enum KemErrorClass {
     /// draft {{sec-mode-selection}}: `clientDHNonce` present alongside a KEM
     /// OID in `clientPublicValue` — `KDC_ERR_PREAUTH_FAILED`.
     PreauthFailed,
+    /// {{RFC4556}} Section 3.2.2: the client's CMS signature over the
+    /// AuthPack does not verify — `KDC_ERR_INVALID_SIG`.
+    InvalidSignature,
+    /// {{RFC4556}} Section 3.2.2: the client certificate does not chain to a
+    /// trusted anchor — `KDC_ERR_CLIENT_NOT_TRUSTED`.
+    ClientNotTrusted,
+    /// {{RFC4556}} Section 3.2.2: the client certificate lacks the required
+    /// extended key usage — `KDC_ERR_INCONSISTENT_KEY_PURPOSE`.
+    InconsistentKeyPurpose,
     /// No specific error code is mandated by the draft; the plugin layer
     /// should fall back to a generic preauth failure.
     Other,
@@ -137,6 +146,9 @@ impl PkinitError {
                 KemErrorClass::NoAcceptableKdf
             }
             PkinitError::KemNonceNotAllowed => KemErrorClass::PreauthFailed,
+            PkinitError::CmsVerifyFailed(_) => KemErrorClass::InvalidSignature,
+            PkinitError::ChainValidationFailed(_) => KemErrorClass::ClientNotTrusted,
+            PkinitError::EkuMismatch(_) => KemErrorClass::InconsistentKeyPurpose,
             _ => KemErrorClass::Other,
         }
     }
