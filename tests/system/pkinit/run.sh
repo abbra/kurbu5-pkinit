@@ -24,7 +24,10 @@ MIT_PKINIT_SO="${MIT_PKINIT_SO:-/usr/lib64/krb5/plugins/preauth/pkinit.so}"
 
 COMBO_ARG="all"
 KEY_TYPE="ec:P-256"
-PQC_MIN_ALGORITHM=""
+# Post-quantum key exchange by default; MIT interop combos override it with
+# "none" (classic DH/ECDH) since MIT's pkinit.so has no KEM support.
+PQC_MIN_ALGORITHM="ML-KEM-768"
+CLASSIC_KEX="none"
 SHOW_TRACE=false
 TOTAL_PASS=0
 TOTAL_FAIL=0
@@ -46,12 +49,13 @@ where
                             rsa:2048, rsa:3072, rsa:4096,
                             mldsa44, mldsa65, mldsa87]
                            (default: ec:P-256)
-  --pqc-min-algorithm  -- minimal PQC algorithm to require; enables the KEM
-                           path instead of DH/ECDH when set
+  --pqc-min-algorithm  -- minimal ML-KEM algorithm for the us-us key exchange
                            [ML-KEM-512, ML-KEM-768, ML-KEM-1024,
                             ML-KEM-768-X25519, ML-KEM-768-ECDH-P256,
-                            ML-KEM-1024-ECDH-P384]
-                           (default: unset -- classic DH/ECDH path)
+                            ML-KEM-1024-ECDH-P384, none]
+                           (default: ML-KEM-768; none -- classic DH/ECDH).
+                           Combos involving MIT pkinit.so always use classic
+                           DH/ECDH: it has no KEM support.
   --show-trace         -- print the KDC log and the separate KDC-side and
                            client-side KRB5_TRACE output for every combo,
                            not just failed ones. Both traces are always
@@ -133,7 +137,7 @@ fi
 # -- Per-combo test runner --
 
 run_combo() {
-    local combo="$1" kdc_so="$2" client_so="$3"
+    local combo="$1" kdc_so="$2" client_so="$3" pqc="$4"
     local TESTDIR
     TESTDIR="$(mktemp -d /tmp/pkinit-test-${combo}.XXXXXXXXXX)"
     local ENV_FILE="$TESTDIR/env.sh"
@@ -141,13 +145,10 @@ run_combo() {
     local FAIL_BEFORE=$TOTAL_FAIL
 
     echo
-    echo "=== Combo: $combo (KDC=$(basename "$kdc_so"), Client=$(basename "$client_so"), KeyType=$KEY_TYPE${PQC_MIN_ALGORITHM:+, PQC=$PQC_MIN_ALGORITHM}) ==="
+    echo "=== Combo: $combo (KDC=$(basename "$kdc_so"), Client=$(basename "$client_so"), KeyType=$KEY_TYPE, KEX=$pqc) ==="
 
     # Build optional PQ args
-    local pqc_args=()
-    if [[ -n "$PQC_MIN_ALGORITHM" ]]; then
-        pqc_args+=(--pqc-min-algorithm "$PQC_MIN_ALGORITHM")
-    fi
+    local pqc_args=(--pqc-min-algorithm "$pqc")
 
     # Start ephemeral KDC
     python3 "$SCRIPT_DIR/setup.py" \
@@ -258,11 +259,11 @@ run_combo() {
 for combo in "${COMBOS[@]}"; do
     case "$combo" in
         us-us)
-            run_combo "$combo" "$PLUGIN_SO" "$PLUGIN_SO"
+            run_combo "$combo" "$PLUGIN_SO" "$PLUGIN_SO" "$PQC_MIN_ALGORITHM"
             ;;
         us-mit)
             if $HAS_MIT_PKINIT; then
-                run_combo "$combo" "$PLUGIN_SO" "$MIT_PKINIT_SO"
+                run_combo "$combo" "$PLUGIN_SO" "$MIT_PKINIT_SO" "$CLASSIC_KEX"
             else
                 echo
                 echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
@@ -274,7 +275,7 @@ for combo in "${COMBOS[@]}"; do
             ;;
         mit-us)
             if $HAS_MIT_PKINIT; then
-                run_combo "$combo" "$MIT_PKINIT_SO" "$PLUGIN_SO"
+                run_combo "$combo" "$MIT_PKINIT_SO" "$PLUGIN_SO" "$CLASSIC_KEX"
             else
                 echo
                 echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
@@ -286,7 +287,7 @@ for combo in "${COMBOS[@]}"; do
             ;;
         mit-mit)
             if $HAS_MIT_PKINIT; then
-                run_combo "$combo" "$MIT_PKINIT_SO" "$MIT_PKINIT_SO"
+                run_combo "$combo" "$MIT_PKINIT_SO" "$MIT_PKINIT_SO" "$CLASSIC_KEX"
             else
                 echo
                 echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="

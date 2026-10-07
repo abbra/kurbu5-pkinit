@@ -358,10 +358,11 @@ watch a trust prompt arrive on your own terminal or as a desktop
 notification -- whatever you like. Exiting the shell (exit, Ctrl-D) tears
 everything down: KDC, broker, socket, temp files.
 
---key-type and --pqc-min-algorithm are independent: one is about the
-certificates, the other about the key exchange. Setting one does not imply
-or affect the other -- pass --pqc-min-algorithm too if you want a fully
-post-quantum exchange, not just a post-quantum CA.
+The key exchange is post-quantum (ML-KEM-768) by default, whatever
+--key-type the certificates use: --key-type is about the certificates,
+--pqc-min-algorithm about the key exchange, and neither affects the other.
+Pass --pqc-min-algorithm none for classic DH/ECDH, e.g. to reproduce what
+an MIT pkinit.so peer would negotiate.
 
 --token switches the client identity from the generated self-signed client
 cert to a certificate stored on a PKCS#11 token. The private key never
@@ -379,11 +380,11 @@ Options:
                             tests/system/pkinit/setup.py: ec:P-256,
                             ec:P-384, ec:P-521, rsa:2048, rsa:3072,
                             rsa:4096, mldsa44, mldsa65, mldsa87.
-  --pqc-min-algorithm ALG  Minimum ML-KEM strength to require, switching
-                            the key exchange itself to the KEM path
-                            instead of classical DH/ECDH (default: unset,
-                            i.e. DH/ECDH regardless of --key-type). E.g.
-                            ML-KEM-768, ML-KEM-1024, ML-KEM-768-X25519.
+  --pqc-min-algorithm ALG  Minimum ML-KEM strength for the key exchange
+                            (default: ML-KEM-768, regardless of
+                            --key-type). E.g. ML-KEM-1024,
+                            ML-KEM-768-X25519; "none" selects classic
+                            DH/ECDH instead.
   --realm REALM             Kerberos realm name (default: PKINIT.TEST)
   --principal NAME          Client principal name (default: user)
   --no-tofu                 Skip the trust broker; give the client a static
@@ -414,10 +415,11 @@ See docs/local-ci.md for a walkthrough of the playground.
 Examples:
   $(basename "$0") interactive
   $(basename "$0") interactive --key-type mldsa65
-                                    # post-quantum CA/KDC/client certs;
-                                    # key exchange is still classical DH
-  $(basename "$0") interactive --key-type mldsa65 --pqc-min-algorithm ML-KEM-768
-                                    # ... and a post-quantum key exchange too
+                                    # post-quantum certs and key exchange
+  $(basename "$0") interactive --pqc-min-algorithm ML-KEM-1024
+                                    # stronger ML-KEM floor
+  $(basename "$0") interactive --pqc-min-algorithm none
+                                    # classic DH/ECDH key exchange
   $(basename "$0") interactive --no-tofu --key-type rsa:2048
   $(basename "$0") interactive --ui tty
   $(basename "$0") interactive --token "pkcs11:token=MyToken;object=mykey;type=private?pin-value=1234"
@@ -432,7 +434,7 @@ run_interactive_playground() {
         return 1
     fi
 
-    local key_type="ec:P-256" pqc_min="" realm="PKINIT.TEST" principal="user" \
+    local key_type="ec:P-256" pqc_min="ML-KEM-768" realm="PKINIT.TEST" principal="user" \
           realm_explicit=0 principal_explicit=0 tofu=1 ui="auto" \
           token="" client_ca="" pkcs11_module=""
     while [[ $# -gt 0 ]]; do
@@ -507,7 +509,7 @@ run_interactive_playground() {
     else
         setup_args+=(--realm "$realm" --principal "$principal")
     fi
-    [[ -n "$pqc_min" ]] && setup_args+=(--pqc-min-algorithm "$pqc_min")
+    setup_args+=(--pqc-min-algorithm "$pqc_min")
 
     if [[ "$tofu" == 1 ]]; then
         # setsid: without this, the broker shares this script's process
@@ -573,10 +575,10 @@ run_interactive_playground() {
     else
         echo "  cert algorithm: $key_type (CA/KDC/client cert signing -- independent of key exchange below)"
     fi
-    if [[ -n "$pqc_min" ]]; then
+    if [[ "$pqc_min" != none ]]; then
         echo "  key exchange:   $pqc_min (post-quantum)"
     else
-        echo "  key exchange:   DH/ECDH (classical -- pass --pqc-min-algorithm for ML-KEM instead)"
+        echo "  key exchange:   DH/ECDH (classic -- --pqc-min-algorithm none)"
     fi
     if [[ "$tofu" == 1 ]]; then
         echo "  trust:          TOFU via broker at $sock (--ui $ui)"
