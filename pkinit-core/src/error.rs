@@ -87,6 +87,8 @@ pub enum PkinitError {
     NoAcceptableKdf,
     #[error("KDC selected a KDF the client did not offer: {0}")]
     KdfNotOffered(String),
+    #[error("no mutually acceptable key-establishment algorithm: {0}")]
+    NoAcceptableKeyExchange(String),
 
     #[error("clientDHNonce must be absent when clientPublicValue carries a KEM algorithm")]
     KemNonceNotAllowed,

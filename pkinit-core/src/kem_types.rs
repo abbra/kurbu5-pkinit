@@ -250,11 +250,16 @@ pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, P
     Ok(out)
 }
 
-/// Parse `ephemeralKeyParameters` OIDs from a `PA-PK-AS-REQ-Hint`.
+/// An offered key-establishment algorithm: its OID and, for DH/ECDH groups,
+/// the DER of its domain parameters.
+pub(crate) type OfferedAlgorithm = (Vec<u32>, Option<Vec<u8>>);
+
+/// Parse `ephemeralKeyParameters` from a `PA-PK-AS-REQ-Hint`, in the KDC's
+/// order of preference.
 ///
-/// Returns the list of algorithm OIDs found in the hint. If the hint is
-/// empty or has no `ephemeralKeyParameters`, returns an empty vec.
-pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, PkinitError> {
+/// If the hint is empty or has no `ephemeralKeyParameters`, returns an empty
+/// vec.
+pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<OfferedAlgorithm>, PkinitError> {
     // Outer SEQUENCE
     if hint_der.is_empty() || hint_der[0] != 0x30 {
         return Err(PkinitError::Asn1(
@@ -291,10 +296,19 @@ pub(crate) fn parse_pkinit_hint(hint_der: &[u8]) -> Result<Vec<Vec<u32>>, Pkinit
             .decode()
             .map_err(asn1_err("decode ephemeralKeyParameters"))?;
 
-    Ok(alg_ids
-        .iter()
-        .map(|a| a.algorithm.components().to_vec())
-        .collect())
+    alg_ids.iter().map(offered_algorithm).collect()
+}
+
+pub(crate) fn offered_algorithm(
+    alg_id: &AlgorithmIdentifier<'_>,
+) -> Result<OfferedAlgorithm, PkinitError> {
+    let params = alg_id
+        .parameters
+        .as_ref()
+        .map(synta::ToDer::to_der)
+        .transpose()
+        .map_err(asn1_err("encode algorithm parameters"))?;
+    Ok((alg_id.algorithm.components().to_vec(), params))
 }
 
 #[cfg(test)]
@@ -418,8 +432,8 @@ mod tests {
         let hint_der = encode_pkinit_hint(&oids).unwrap();
         let parsed = parse_pkinit_hint(&hint_der).unwrap();
         assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0].as_slice(), constants::ID_ML_KEM_768);
-        assert_eq!(parsed[1].as_slice(), constants::ID_ML_KEM_1024);
+        assert_eq!(parsed[0].0.as_slice(), constants::ID_ML_KEM_768);
+        assert_eq!(parsed[1].0.as_slice(), constants::ID_ML_KEM_1024);
     }
 
     #[test]
@@ -436,6 +450,6 @@ mod tests {
         let hint_der = encode_pkinit_hint(&oids).unwrap();
         let parsed = parse_pkinit_hint(&hint_der).unwrap();
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].as_slice(), constants::ID_ML_KEM_512);
+        assert_eq!(parsed[0].0.as_slice(), constants::ID_ML_KEM_512);
     }
 }

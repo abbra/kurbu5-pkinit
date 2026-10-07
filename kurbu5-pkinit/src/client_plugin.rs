@@ -195,7 +195,21 @@ impl ClpreauthModule for PkinitClient {
 
                 let hint_contents = pa_data_contents(req.pa_data);
                 if !hint_contents.is_empty() {
-                    let _ = state.process_pkinit_hint(&hint_contents);
+                    match state.process_pkinit_hint(&hint_contents) {
+                        Ok(()) => {}
+                        // A hint we cannot parse is ignored, as RFC 4556
+                        // Section 3.4 has clients do with padata-value
+                        // content they do not understand.
+                        Err(PkinitError::Asn1(e)) => {
+                            pkinit_trace!(ctx, "PKINIT client ignoring malformed hint: {}", e);
+                        }
+                        // A well-formed hint offering nothing acceptable ends
+                        // the attempt: no unadvertised algorithm is tried.
+                        Err(e) => {
+                            pkinit_trace!(ctx, "PKINIT client: {}", e);
+                            return Err(Krb5Error::Custom(libc::EINVAL));
+                        }
+                    }
                 }
 
                 pkinit_trace!(ctx, "PKINIT client building AS-REQ");
