@@ -773,6 +773,121 @@ mod tests {
         assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
     }
 
+    /// Run a KEM exchange, but have the KDC sign a KDCKEMInfo whose
+    /// kdfAlgorithm was replaced by `edit`, and return the client's verdict.
+    fn kem_exchange_with_signed_kdf(
+        edit: impl FnOnce(&mut synta_certificate::AlgorithmIdentifier<'static>),
+    ) -> Result<crate::crypto::kdf::DerivedKey, PkinitError> {
+        use crate::kem_types::{
+            KdcKemInfo, KemRepInfo, decode_kem_rep_content, encode_kem_rep_wrapper,
+        };
+
+        let (client_id, kdc_id, trust_store) = generate_test_pki();
+        let o2k = MockO2K;
+        let mut client = PkinitClientState::new(
+            client_id,
+            trust_store.clone(),
+            PkinitClientConfig {
+                kem_algorithm: Some(KemAlgorithm::MlKem768),
+                ..Default::default()
+            },
+        );
+        client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
+        let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
+
+        let req_body_der = b"mock-req-body";
+        let ctime = 1719600000i64;
+        let nonce = next_nonce();
+        let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
+        let verified = server
+            .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
+            .unwrap();
+        let as_req_der = b"mock-full-as-req";
+        let client_name = "testuser@EXAMPLE.COM";
+        let server_name = "krbtgt/EXAMPLE.COM@EXAMPLE.COM";
+        let (pa_rep, _) = server
+            .build_as_rep(
+                &verified,
+                &BuildAsRepParams {
+                    nonce,
+                    enctype: 18,
+                    as_req_der,
+                    client_name,
+                    server_name,
+                },
+                &o2k,
+            )
+            .unwrap();
+
+        // Re-sign an edited KDCKEMInfo with the genuine KDC key, so the reply
+        // passes every check except the one under test.
+        let kem_rep_info = KemRepInfo::from_der(&decode_kem_rep_content(&pa_rep).unwrap()).unwrap();
+        let signed = cms::verify_signed_data(kem_rep_info.kem_signed_data.as_bytes()).unwrap();
+        let info = KdcKemInfo::from_der(&signed.content).unwrap();
+        let mut kdf_algorithm = synta_certificate::AlgorithmIdentifier {
+            algorithm: info.kdf_algorithm.algorithm.clone(),
+            parameters: None,
+        };
+        edit(&mut kdf_algorithm);
+        let edited = KdcKemInfo {
+            kdf_algorithm,
+            ..info
+        };
+        let chain: Vec<&[u8]> = server.identity.chain.iter().map(|c| c.as_slice()).collect();
+        let resigned = cms::create_signed_data(
+            &edited.to_der().unwrap(),
+            constants::ID_PKINIT_KEM_KEY_DATA,
+            server.identity.signing_key.as_ref().unwrap(),
+            &server.identity.cert_der,
+            &chain,
+            "sha256",
+        )
+        .unwrap();
+        let pa_rep = encode_kem_rep_wrapper(&KemRepInfo {
+            kem_signed_data: synta::OctetString::new(resigned),
+        })
+        .unwrap();
+
+        client.process_as_rep(
+            &pa_rep,
+            &crate::client::AsRepParams {
+                nonce,
+                enctype: 18,
+                as_req_der,
+                pa_rep_raw: &pa_rep,
+                client_name,
+                server_name,
+            },
+            &o2k,
+        )
+    }
+
+    #[test]
+    fn client_accepts_signed_hkdf_sha512() {
+        kem_exchange_with_signed_kdf(|_| {}).expect("unmodified KDF must be accepted");
+    }
+
+    #[test]
+    fn client_rejects_signed_kdf_it_did_not_offer() {
+        let err = kem_exchange_with_signed_kdf(|kdf| {
+            kdf.algorithm =
+                synta::ObjectIdentifier::new(constants::ID_PKINIT_KDF_AH_SHA512).unwrap();
+        })
+        .err()
+        .expect("a KDF the client did not offer must be rejected");
+        assert!(matches!(err, PkinitError::KdfNotOffered(_)), "{err}");
+    }
+
+    #[test]
+    fn client_rejects_signed_kdf_with_parameters() {
+        let err = kem_exchange_with_signed_kdf(|kdf| {
+            kdf.parameters = Some(synta::Element::Null(synta::Null));
+        })
+        .err()
+        .expect("kdfAlgorithm parameters must be absent");
+        assert!(matches!(err, PkinitError::KdfNotOffered(_)), "{err}");
+    }
+
     #[test]
     fn tampered_signature_is_invalid_sig_not_anonymous() {
         use crate::error::KemErrorClass;
