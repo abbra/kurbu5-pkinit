@@ -58,8 +58,11 @@ impl PkinitClientState {
     pub fn new(
         identity: PkinitIdentity,
         trust_store: TrustStore,
-        config: PkinitClientConfig,
+        mut config: PkinitClientConfig,
     ) -> Self {
+        if config.require_kem && config.kem_algorithm.is_none() {
+            config.kem_algorithm = Some(KemAlgorithm::MlKem768);
+        }
         Self {
             identity,
             trust_store,
@@ -256,6 +259,11 @@ impl PkinitClientState {
             pa_checksum2: Some(pa_checksum2),
         };
 
+        if self.config.require_kem && self.config.kem_algorithm.is_none() {
+            return Err(PkinitError::DowngradeRejected(
+                "classic DH/ECDH key exchange refused: pkinit_require_kem is set".into(),
+            ));
+        }
         let use_kem = self.config.kem_algorithm.is_some();
 
         let client_spki_der = if let Some(kem_alg) = self.config.kem_algorithm {
@@ -568,6 +576,11 @@ impl PkinitClientState {
                     // started on classical DH (cert algorithm and key
                     // exchange are independently configured). Gate on the
                     // key-exchange path actually used for that attempt.
+                    if self.config.require_kem {
+                        return Err(PkinitError::DowngradeRejected(
+                            "KDC offered only classic DH/ECDH; pkinit_require_kem is set".into(),
+                        ));
+                    }
                     if self.has_pq_certificate()
                         && matches!(self.key_exchange, Some(KeyExchangeType::Kem(_)))
                     {
@@ -1082,6 +1095,69 @@ mod tests {
         let padata_der = wrap_as_td_dh_parameters_padata(classical_dh_only_td_params());
         let action = state.handle_tryagain(&padata_der).unwrap();
         assert!(matches!(action, RetryAction::RetryWithDhParams(_)));
+    }
+
+    fn classical_cert_client(config: PkinitClientConfig) -> PkinitClientState {
+        PkinitClientState::new(
+            PkinitIdentity {
+                cert_der: vec![],
+                signing_key: None,
+                chain: vec![],
+            },
+            TrustStore::new(),
+            config,
+        )
+    }
+
+    #[test]
+    fn require_kem_defaults_to_ml_kem_768() {
+        let state = classical_cert_client(PkinitClientConfig {
+            require_kem: true,
+            ..Default::default()
+        });
+        assert_eq!(state.config.kem_algorithm, Some(KemAlgorithm::MlKem768));
+    }
+
+    #[test]
+    fn require_kem_keeps_configured_kem_algorithm() {
+        let state = classical_cert_client(PkinitClientConfig {
+            require_kem: true,
+            kem_algorithm: Some(KemAlgorithm::MlKem1024),
+            ..Default::default()
+        });
+        assert_eq!(state.config.kem_algorithm, Some(KemAlgorithm::MlKem1024));
+    }
+
+    #[test]
+    fn require_kem_refuses_dh_fallback_for_classical_cert_client() {
+        // Unlike the draft's default (a classical-certificate client MAY fall
+        // back to DH), require_kem refuses the downgrade whatever the
+        // certificate algorithm.
+        let mut state = classical_cert_client(PkinitClientConfig {
+            require_kem: true,
+            ..Default::default()
+        });
+        assert!(!state.has_pq_certificate());
+        state.key_exchange = Some(KeyExchangeType::Kem(KemAlgorithm::MlKem768));
+
+        let padata_der = wrap_as_td_dh_parameters_padata(classical_dh_only_td_params());
+        let err = state.handle_tryagain(&padata_der).unwrap_err();
+        assert!(matches!(err, PkinitError::DowngradeRejected(_)));
+    }
+
+    #[test]
+    fn require_kem_refuses_to_build_a_dh_request() {
+        // set_dh_group() switches an existing state to DH; with require_kem
+        // the next AS-REQ must not go out on the classical path.
+        let mut state = classical_cert_client(PkinitClientConfig {
+            require_kem: true,
+            ..Default::default()
+        });
+        state.set_dh_group(DhGroup::EcP256);
+        let err = state
+            .build_as_req(1, 1719600000, 0, b"mock-req-body")
+            .unwrap_err();
+        assert!(matches!(err, PkinitError::DowngradeRejected(_)));
     }
 
     #[test]

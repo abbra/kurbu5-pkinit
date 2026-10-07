@@ -95,7 +95,8 @@ impl KdcpreauthModule for PkinitKdc {
     ) {
         callbacks.send_freshness_token();
 
-        if self.config.supported_kem_algorithms.is_empty()
+        if !self.config.require_kem
+            && self.config.supported_kem_algorithms.is_empty()
             && self.config.supported_composite_kem_algorithms.is_empty()
         {
             respond(Ok(None));
