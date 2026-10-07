@@ -241,7 +241,7 @@ class PkinitRealm:
                  key_type="ec:P-256",
                  pqc_min_algorithm=DEFAULT_PQC_MIN_ALGORITHM,
                  tofu_broker=None, client_token=None, client_ca=None,
-                 pkcs11_module=None, krb5_prefix=None):
+                 pkcs11_module=None, krb5_prefix=None, require_kem=True):
         # realm/principal are None by default so token mode can override them
         # with values derived from the token certificate's KRB5 SAN before
         # any config is written.
@@ -256,6 +256,10 @@ class PkinitRealm:
         if pqc_min_algorithm == CLASSIC_KEX:
             pqc_min_algorithm = None
         self.pqc_min_algorithm = pqc_min_algorithm
+        # With a KEM configured, refuse classic DH/ECDH outright (default),
+        # or merely prefer the KEM and let a traditional-certificate client
+        # fall back (draft Section 11; the interop matrix's C5a/K5a).
+        self.require_kem = require_kem
         # When set, the client krb5.conf enables trust-on-first-use of the KDC
         # CA via the broker at this socket path, omits the client's KDC-CA
         # anchor (so local validation fails and the broker path engages), and
@@ -694,8 +698,9 @@ class PkinitRealm:
             # rather than merely preferring ML-KEM.
             pqc_line = (
                 f"\n                    pkinit_pqc_min_algorithm = {self.pqc_min_algorithm}"
-                "\n                    pkinit_require_kem = true"
             )
+            if self.require_kem:
+                pqc_line += "\n                    pkinit_require_kem = true"
         kdc_pqc_line = pqc_line
         if (self.pqc_min_algorithm or "").upper() in COMPOSITE_KEM_ALGORITHMS:
             kdc_pqc_line += (
@@ -942,6 +947,11 @@ def main():
                              f"(default: {DEFAULT_PQC_MIN_ALGORITHM}); "
                              f"'{CLASSIC_KEX}' selects classic DH/ECDH, for "
                              "interop with MIT's pkinit.so")
+    parser.add_argument("--no-require-kem", dest="require_kem",
+                        action="store_false",
+                        help="With --pqc-min-algorithm, prefer the KEM but do "
+                             "not set pkinit_require_kem: a traditional-"
+                             "certificate client may fall back to DH/ECDH")
     parser.add_argument("--tofu-broker", default=None, metavar="SOCKET",
                         help="Enable KDC-CA trust-on-first-use: client consults "
                              "the broker at this Unix socket, has no static "
@@ -991,6 +1001,7 @@ def main():
         client_ca=args.client_ca,
         pkcs11_module=args.pkcs11_module,
         krb5_prefix=args.krb5_prefix,
+        require_kem=args.require_kem,
     )
     if realm.client_token:
         realm.load_client_token_identity()

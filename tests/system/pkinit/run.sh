@@ -25,6 +25,7 @@ MIT_PKINIT_SO="${MIT_PKINIT_SO:-}"
 # --krb5-prefix); setup.py reads it from the environment.
 KRB5_PREFIX="${KRB5_PREFIX:-}"
 MIT_PQC=false
+REQUIRE_KEM_ARGS=()
 
 COMBO_ARG="all"
 KEY_TYPE="ec:P-256"
@@ -45,7 +46,7 @@ display_help() {
 local message=$(cat <<-END
 Usage:
 $(basename $0) [--combo combo] [--key-type type] [--pqc-min-algorithm alg]
-           [--krb5-prefix dir] [--mit-pqc] [--show-trace]
+           [--krb5-prefix dir] [--mit-pqc] [--no-require-kem] [--show-trace]
 
 where
   --combo combo        -- combination to run [us-us, us-mit, mit-us, mit-mit]
@@ -66,6 +67,9 @@ where
                            MIT combos (default: \$KRB5_PREFIX; else the system
                            krb5). E.g. a build of the draft-bokovoy-kitten-
                            pkinit-pqc MIT implementation.
+  --no-require-kem     -- prefer the KEM but do not set pkinit_require_kem, so
+                           a traditional-certificate client may fall back to
+                           DH/ECDH when the KDC rejects the KEM
   --mit-pqc            -- the MIT pkinit.so implements the draft: run the MIT
                            combos with the --pqc-min-algorithm key exchange
                            too, for KEM interop testing.
@@ -90,6 +94,7 @@ while [[ $# -gt 0 ]]; do
         --pqc-min-algorithm) PQC_MIN_ALGORITHM="$2"; shift 2 ;;
         --krb5-prefix) KRB5_PREFIX="$2"; shift 2 ;;
         --mit-pqc) MIT_PQC=true; shift ;;
+        --no-require-kem) REQUIRE_KEM_ARGS=(--no-require-kem); shift ;;
         --show-trace) SHOW_TRACE=true; shift ;;
         --help) display_help ; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -178,7 +183,7 @@ run_combo() {
     echo "=== Combo: $combo (KDC=$(basename "$kdc_so"), Client=$(basename "$client_so"), KeyType=$KEY_TYPE, KEX=$pqc) ==="
 
     # Build optional PQ args
-    local pqc_args=(--pqc-min-algorithm "$pqc")
+    local pqc_args=(--pqc-min-algorithm "$pqc" "${REQUIRE_KEM_ARGS[@]}")
 
     # Start ephemeral KDC
     python3 "$SCRIPT_DIR/setup.py" \
