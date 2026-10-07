@@ -51,15 +51,173 @@ SUPPORTED_KEY_TYPES = {
 # own default negotiation.
 ENCTYPES = ("aes256-cts-hmac-sha384-192", "aes128-cts-hmac-sha256-128")
 
+# OID of the Kerberos PKINIT otherName SAN (RFC 4556 §3.2.2).
+KRB5_SAN_OID = "1.3.6.1.5.2.2"
+
+# OpenSSL pkcs11-provider and PKCS#11 module candidates (token mode);
+# mirrors the discovery paths in pkinit-core.
+PKCS11_PROVIDER_PATHS = (
+    "/usr/lib64/ossl-modules/pkcs11.so",
+    "/usr/lib/x86_64-linux-gnu/ossl-modules/pkcs11.so",
+    "/usr/lib/aarch64-linux-gnu/ossl-modules/pkcs11.so",
+    "/usr/lib/powerpc64le-linux-gnu/ossl-modules/pkcs11.so",
+    "/usr/lib/s390x-linux-gnu/ossl-modules/pkcs11.so",
+    "/usr/lib/ossl-modules/pkcs11.so",
+)
+PKCS11_MODULE_PATHS = (
+    "/usr/lib64/pkcs11/p11-kit-proxy.so",
+    "/usr/lib/x86_64-linux-gnu/pkcs11/p11-kit-proxy.so",
+    "/usr/lib/aarch64-linux-gnu/pkcs11/p11-kit-proxy.so",
+    "/usr/lib/powerpc64le-linux-gnu/pkcs11/p11-kit-proxy.so",
+    "/usr/lib/s390x-linux-gnu/pkcs11/p11-kit-proxy.so",
+    "/usr/lib/pkcs11/p11-kit-proxy.so",
+)
+
+
+def first_existing(paths):
+    for p in paths:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def redact_pkcs11_uri(uri):
+    """Strip the query component (may carry pin-value) for user-facing output."""
+    return uri.split("?", 1)[0]
+
+
+def pkcs11_cert_uri(uri):
+    """Derive the certificate-selecting PKCS#11 URI from an identity URI.
+
+    Mirrors pkinit-core identity/loader.rs ``pkcs11_cert_uri``: strip any
+    ``type=`` path attribute, append ``type=cert``, preserve all other path
+    attributes and the query component (carries ``pin-value``).
+    """
+    path, sep, query = uri.partition("?")
+    components = [c for c in path.split(";") if not c.startswith("type=")]
+    out = ";".join(components) + ";type=cert"
+    if sep:
+        out += "?" + query
+    return out
+
+
+def pkcs11_token_cert_uri(uri):
+    """All-certificates URI for the token: drop ``object=`` as well, keep the
+    rest of the path attributes and the query component."""
+    path, sep, query = uri.partition("?")
+    components = [
+        c for c in path.split(";")
+        if not c.startswith(("type=", "object="))
+    ]
+    out = ";".join(components) + ";type=cert"
+    if sep:
+        out += "?" + query
+    return out
+
+
+def _synta():
+    """Import the python3-synta modules used for token-mode certificate work.
+
+    Raises an actionable error when the packages (or the krb5 subpackage)
+    are missing.  The check is a live decode, not just an import, because a
+    python3-synta without python3-synta-krb5 loads a silent stub module.
+    """
+    try:
+        import synta
+        import synta.general_name as gn
+        from synta.krb5 import Krb5PrincipalName
+    except ImportError as e:
+        raise RuntimeError(
+            "token mode requires the python3-synta packages: "
+            "dnf install python3-synta python3-synta-krb5"
+        ) from e
+    probe = Krb5PrincipalName(realm="R", name_type=1, components=["c"])
+    if probe.realm != "R":
+        raise RuntimeError(
+            "python3-synta-krb5 is not installed (synta.krb5 is a stub): "
+            "dnf install python3-synta-krb5"
+        )
+    return synta, gn, Krb5PrincipalName
+
+
+def parse_krb5_san(cert_der):
+    """Return ``(principal, realm)`` from the KRB5 otherName SAN of a DER
+    certificate, or ``None`` when absent.
+
+    Decodes with ``synta.krb5.Krb5PrincipalName`` -- the same decoder the
+    kurbu5-pkinit plugin uses, so a SAN readable here is readable there.
+    """
+    synta, gn, Krb5PrincipalName = _synta()
+    cert = synta.Certificate.from_der(cert_der)
+    for name in cert.subject_alt_names():
+        if isinstance(name, gn.OtherName) and str(name.type_id) == KRB5_SAN_OID:
+            kp = Krb5PrincipalName.from_der(name.value)
+            return "/".join(kp.components), kp.realm
+    return None
+
+
+def select_cert_anchor(leaf_der, candidate_ders):
+    """Return the DER of the anchor for ``leaf_der`` among ``candidate_ders``.
+
+    Self-signed leaf: the leaf itself.  Otherwise the first candidate whose
+    subject matches the leaf's issuer and cryptographically verifies it.
+    ``None`` when no anchor is found.
+    """
+    synta, _gn, _kp = _synta()
+    leaf = synta.Certificate.from_der(leaf_der)
+    if leaf.issuer == leaf.subject:
+        return leaf_der
+    for cand in candidate_ders:
+        issuer = synta.Certificate.from_der(cand)
+        if issuer.subject != leaf.issuer:
+            continue
+        try:
+            leaf.verify_issued_by(issuer)
+        except Exception:
+            continue
+        return cand
+    return None
+
+
+def _pem_blocks(text):
+    """Split openssl storeutl output into individual PEM certificate blocks."""
+    blocks, current = [], None
+    for line in text.splitlines():
+        s = line.strip()
+        if s == "-----BEGIN CERTIFICATE-----":
+            current = [s]
+        elif s == "-----END CERTIFICATE-----":
+            if current is not None:
+                current.append(s)
+                blocks.append("\n".join(current))
+                current = None
+        elif current is not None:
+            current.append(s)
+    return blocks
+
+
+def _certs_from_file(path):
+    """Parse a PEM file (one or more certificates) into Certificate objects."""
+    synta, _gn, _kp = _synta()
+    with open(path, "rb") as f:
+        parsed = synta.Certificate.from_pem(f.read())
+    if isinstance(parsed, list):
+        return parsed
+    return [parsed]
+
 
 class PkinitRealm:
-    def __init__(self, testdir=None, realm=REALM, portbase=PORTBASE,
-                 kdc_plugin_so=None, client_plugin_so=None, principal="user",
+    def __init__(self, testdir=None, realm=None, portbase=PORTBASE,
+                 kdc_plugin_so=None, client_plugin_so=None, principal=None,
                  key_type="ec:P-256", pqc_min_algorithm=None,
-                 tofu_broker=None):
-        self.realm = realm
+                 tofu_broker=None, client_token=None, client_ca=None,
+                 pkcs11_module=None):
+        # realm/principal are None by default so token mode can override them
+        # with values derived from the token certificate's KRB5 SAN before
+        # any config is written.
+        self.realm = realm if realm is not None else REALM
         self.portbase = portbase
-        self.principal = principal
+        self.principal = principal if principal is not None else "user"
         self.key_type = key_type
         self.pqc_min_algorithm = pqc_min_algorithm
         # When set, the client krb5.conf enables trust-on-first-use of the KDC
@@ -67,6 +225,23 @@ class PkinitRealm:
         # anchor (so local validation fails and the broker path engages), and
         # turns on auto_fast_armor so the anonymous exchange establishes trust.
         self.tofu_broker = tofu_broker
+        # Token mode: the client identity is a certificate on a PKCS#11 token
+        # (loaded at runtime by the plugin via the OpenSSL pkcs11-provider);
+        # no client key material is ever generated or extracted.
+        self.client_token = client_token
+        self.client_ca = client_ca
+        self.pkcs11_module = pkcs11_module
+        self.token_principal = None
+        self.token_realm = None
+        if client_token:
+            if not client_token.startswith("pkcs11:"):
+                raise ValueError(
+                    f"--client-token must be a pkcs11: URI, got {client_token!r}"
+                )
+            if client_ca and not os.path.isfile(client_ca):
+                raise ValueError(f"--client-ca file not found: {client_ca}")
+        elif client_ca:
+            raise ValueError("--client-ca requires --client-token")
         if key_type not in SUPPORTED_KEY_TYPES:
             raise ValueError(
                 f"Unsupported key type: {key_type}. "
@@ -91,6 +266,10 @@ class PkinitRealm:
 
         self.certs_dir = os.path.join(self.testdir, "certs")
         self.plugins_dir = os.path.join(self.testdir, "plugins")
+
+        self.openssl_conf = os.path.join(self.testdir, "openssl-pkcs11.cnf")
+        self.client_token_leaf = os.path.join(self.certs_dir, "client-token.pem")
+        self.client_token_anchor = os.path.join(self.certs_dir, "client-token-ca.pem")
 
         self.ca_cert = os.path.join(self.certs_dir, "ca.pem")
         self.ca_key = os.path.join(self.certs_dir, "ca-key.pem")
@@ -117,6 +296,127 @@ class PkinitRealm:
         # same file and interleave.
         e["KRB5_TRACE"] = self.kdc_trace
         return e
+
+    # -- Client token identity (token mode) --
+
+    def load_client_token_identity(self):
+        """Prepare the client identity held on a PKCS#11 token.
+
+        Writes an OpenSSL pkcs11-provider config into testdir (reusing
+        ``$OPENSSL_CONF`` when it already points at an existing file),
+        extracts the certificate bound to the key object from the token via
+        ``openssl storeutl``, derives the KRB5 principal and realm from the
+        certificate's KRB5 otherName SAN, and resolves the issuer anchor:
+        the ``--client-ca`` file when given, otherwise a certificate on the
+        token that issued the leaf.
+
+        Idempotent: re-running re-extracts and rewrites the local files.
+        """
+        if not self.client_token:
+            return
+        os.makedirs(self.certs_dir, exist_ok=True)
+
+        # Provider config: reuse the caller's OPENSSL_CONF when it exists.
+        existing = os.environ.get("OPENSSL_CONF")
+        if existing and os.path.isfile(existing):
+            self.openssl_conf = existing
+        else:
+            provider = first_existing(PKCS11_PROVIDER_PATHS)
+            if not provider:
+                raise RuntimeError(
+                    "OpenSSL pkcs11-provider not found; searched: "
+                    + ", ".join(PKCS11_PROVIDER_PATHS)
+                )
+            module = self.pkcs11_module or first_existing(PKCS11_MODULE_PATHS)
+            lines = [
+                "openssl_conf = openssl_init",
+                "",
+                "[openssl_init]",
+                "providers = provider_sect",
+                "",
+                "[provider_sect]",
+                "default = default_sect",
+                "pkcs11 = pkcs11_sect",
+                "",
+                "[default_sect]",
+                "activate = 1",
+                "",
+                "[pkcs11_sect]",
+                f"module = {provider}",
+            ]
+            if module:
+                lines.append(f"pkcs11-module-path = {module}")
+            lines.append("activate = 1")
+            lines.append("")
+            with open(self.openssl_conf, "w") as f:
+                f.write("\n".join(lines))
+            if not module:
+                print(
+                    "[setup] warning: no PKCS#11 module found (no p11-kit-proxy); "
+                    "pass --pkcs11-module to pin one",
+                    file=sys.stderr,
+                )
+
+        env = os.environ.copy()
+        env["OPENSSL_CONF"] = self.openssl_conf
+        synta, _gn, _kp = _synta()
+
+        # Leaf: the certificate bound to the key object (the plugin's
+        # identity URI with type=cert).
+        leaf_uri = pkcs11_cert_uri(self.client_token)
+        leaf_out = self._run_openssl("storeutl", "-certs", leaf_uri, env=env)
+        leaf_pems = _pem_blocks(leaf_out)
+        if not leaf_pems:
+            raise RuntimeError(
+                f"no certificate found for {redact_pkcs11_uri(leaf_uri)}; "
+                "the token object must hold the client certificate "
+                "(import it, e.g. with pkcs11-tool --write-object)"
+            )
+        leaf = synta.Certificate.from_pem(leaf_pems[0].encode())
+        leaf_der = leaf.to_der()
+        with open(self.client_token_leaf, "w") as f:
+            f.write(synta.Certificate.to_pem(leaf).decode() + "\n")
+
+        # KRB5 principal/realm from the SAN (the plugin's own decoder).
+        san = parse_krb5_san(leaf_der)
+        if san is None:
+            raise RuntimeError(
+                "client certificate has no KRB5 otherName SAN "
+                f"(OID {KRB5_SAN_OID}); pass --realm and --principal explicitly"
+            )
+        self.token_principal, self.token_realm = san
+
+        # Anchor: an explicit --client-ca file wins; otherwise search the
+        # token for the issuer.
+        if self.client_ca:
+            anchor_ders = [c.to_der() for c in _certs_from_file(self.client_ca)]
+            anchor_der = select_cert_anchor(leaf_der, anchor_ders)
+            if anchor_der is None:
+                raise RuntimeError(
+                    f"client certificate does not verify against {self.client_ca}; "
+                    "pass the CA that issued it"
+                )
+        else:
+            token_uri = pkcs11_token_cert_uri(self.client_token)
+            token_out = self._run_openssl("storeutl", "-certs", token_uri, env=env)
+            candidate_ders = []
+            for pem in _pem_blocks(token_out):
+                der = synta.Certificate.from_pem(pem.encode()).to_der()
+                if der != leaf_der:
+                    candidate_ders.append(der)
+            anchor_der = select_cert_anchor(leaf_der, candidate_ders)
+            if anchor_der is None:
+                raise RuntimeError(
+                    "client certificate issuer not found on the token; "
+                    "import it into the token or pass --client-ca <file>"
+                )
+        with open(self.client_token_anchor, "w") as f:
+            f.write(
+                synta.Certificate.to_pem(
+                    synta.Certificate.from_der(anchor_der)
+                ).decode()
+                + "\n"
+            )
 
     # -- PKI generation --
 
@@ -187,58 +487,63 @@ class PkinitRealm:
             "-extfile", kdc_ext_cnf, "-extensions", "kdc_exts",
         )
 
-        # Client cert
-        client_ext_cnf = os.path.join(self.certs_dir, "client-ext.cnf")
-        with open(client_ext_cnf, "w") as f:
-            f.write(textwrap.dedent(f"""\
-                [client_exts]
-                basicConstraints = CA:FALSE
-                keyUsage = digitalSignature
-                extendedKeyUsage = 1.3.6.1.5.2.3.4
-                subjectKeyIdentifier = hash
-                authorityKeyIdentifier = keyid,issuer
-                subjectAltName = @client_san
+        if not self.client_token:
+            # Client cert and key (skipped in token mode: the identity
+            # certificate and private key live on the PKCS#11 token and are
+            # never extracted to files).
+            client_ext_cnf = os.path.join(self.certs_dir, "client-ext.cnf")
+            with open(client_ext_cnf, "w") as f:
+                f.write(textwrap.dedent(f"""\
+                    [client_exts]
+                    basicConstraints = CA:FALSE
+                    keyUsage = digitalSignature
+                    extendedKeyUsage = 1.3.6.1.5.2.3.4
+                    subjectKeyIdentifier = hash
+                    authorityKeyIdentifier = keyid,issuer
+                    subjectAltName = @client_san
 
-                [client_san]
-                otherName = 1.3.6.1.5.2.2;SEQUENCE:krb5princ_client
+                    [client_san]
+                    otherName = 1.3.6.1.5.2.2;SEQUENCE:krb5princ_client
 
-                [krb5princ_client]
-                realm = EXPLICIT:0,GeneralString:{self.realm}
-                princ = EXPLICIT:1,SEQUENCE:princ_client
+                    [krb5princ_client]
+                    realm = EXPLICIT:0,GeneralString:{self.realm}
+                    princ = EXPLICIT:1,SEQUENCE:princ_client
 
-                [princ_client]
-                nametype = EXPLICIT:0,INTEGER:1
-                components = EXPLICIT:1,SEQUENCE:components_client
+                    [princ_client]
+                    nametype = EXPLICIT:0,INTEGER:1
+                    components = EXPLICIT:1,SEQUENCE:components_client
 
-                [components_client]
-                component = GeneralString:{self.principal}
-            """))
+                    [components_client]
+                    component = GeneralString:{self.principal}
+                """))
 
-        client_csr = os.path.join(self.certs_dir, "client.csr")
-        self._run_openssl(
-            "req", "-new", *newkey,
-            "-keyout", self.client_key, "-out", client_csr,
-            "-noenc", "-subj", f"/CN={self.principal}",
-        )
-        self._run_openssl(
-            "x509", "-req", "-in", client_csr,
-            "-CA", self.ca_cert, "-CAkey", self.ca_key,
-            "-CAcreateserial", "-out", self.client_cert,
-            "-days", "1",
-            "-extfile", client_ext_cnf, "-extensions", "client_exts",
-        )
+            client_csr = os.path.join(self.certs_dir, "client.csr")
+            self._run_openssl(
+                "req", "-new", *newkey,
+                "-keyout", self.client_key, "-out", client_csr,
+                "-noenc", "-subj", f"/CN={self.principal}",
+            )
+            self._run_openssl(
+                "x509", "-req", "-in", client_csr,
+                "-CA", self.ca_cert, "-CAkey", self.ca_key,
+                "-CAcreateserial", "-out", self.client_cert,
+                "-days", "1",
+                "-extfile", client_ext_cnf, "-extensions", "client_exts",
+            )
 
         print(f"[setup] PKI generated in {self.certs_dir}", file=sys.stderr)
 
-    def _run_openssl(self, *args):
+    def _run_openssl(self, *args, env=None):
         result = subprocess.run(
             ["openssl", *args],
+            env=env,
             capture_output=True, text=True,
         )
         if result.returncode != 0:
             raise RuntimeError(
                 f"openssl {args[0]} failed:\n{result.stderr}"
             )
+        return result.stdout
 
     # -- Plugin validation --
 
@@ -330,6 +635,16 @@ class PkinitRealm:
         else:
             client_pkinit = f"pkinit_anchors = FILE:{self.ca_cert}"
         client_pkinit += pqc_line
+        if self.client_token:
+            # The client identity comes from the PKCS#11 token. read_client_config
+            # reads it with Profile::get_string_opt, which distinguishes an
+            # absent key from an empty one, so it is safe to emit it under
+            # [realms]: the libdefaults check finds it absent and moves on.
+            # The PIN may be embedded in the URI -- acceptable because the
+            # config lives in a 0700 dir.
+            client_pkinit += (
+                f"\n                    pkinit_identities = PKCS11:{self.client_token}"
+            )
 
         # KDC identity. Under TOFU the KDC must *present* its issuing CA in the
         # reply's SignedData so the client can pin the CA (not just the leaf);
@@ -374,6 +689,14 @@ class PkinitRealm:
                 }}
         """)
 
+        kdc_anchor_line = f"FILE:{self.ca_cert}"
+        if self.client_token:
+            # The KDC must trust the client cert's issuing CA in addition to
+            # the test-realm CA (the profile reader accepts repeated keys).
+            kdc_anchor_line += (
+                f"\n                    pkinit_anchors = FILE:{self.client_token_anchor}"
+            )
+
         kdc = textwrap.dedent(f"""\
             [kdcdefaults]
                 kdc_ports = {self.portbase}
@@ -397,7 +720,7 @@ class PkinitRealm:
                     max_renewable_life = 24h
                     supported_enctypes = {" ".join(f"{e}:normal" for e in ENCTYPES)}
                     pkinit_identity = {kdc_identity}
-                    pkinit_anchors = FILE:{self.ca_cert}
+                    pkinit_anchors = {kdc_anchor_line}
                     default_principal_flags = +preauth
                     pkinit_eku_checking = none{pqc_line}
                 }}
@@ -433,6 +756,8 @@ class PkinitRealm:
     # -- Lifecycle --
 
     def create_db(self, master_password="pkinit-test-pw"):
+        if self.client_token and self.token_realm is None:
+            self.load_client_token_identity()
         self._generate_pki()
         self._validate_plugins()
         self._write_configs()
@@ -503,7 +828,9 @@ def main():
         description="Start an ephemeral Kerberos realm with PKINIT"
     )
     parser.add_argument("--testdir", default=None)
-    parser.add_argument("--realm", default=REALM)
+    parser.add_argument("--realm", default=None,
+                        help=f"Kerberos realm (default: {REALM}; in token mode "
+                             "derived from the token cert's KRB5 SAN)")
     parser.add_argument("--portbase", type=int, default=PORTBASE)
     parser.add_argument("--plugin-so",
                         help="Path to plugin .so (sets both KDC and client)")
@@ -513,8 +840,9 @@ def main():
                         help="Path to client-side preauth plugin .so")
     parser.add_argument("--env-file", metavar="FILE",
                         help="Write shell-sourceable env vars to FILE")
-    parser.add_argument("--principal", default="user",
-                        help="Client principal name (default: user)")
+    parser.add_argument("--principal", default=None,
+                        help="Client principal name (default: user; in token "
+                             "mode derived from the token cert's KRB5 SAN)")
     parser.add_argument("--key-type", default="ec:P-256",
                         choices=sorted(SUPPORTED_KEY_TYPES),
                         help="Certificate key type (default: ec:P-256)")
@@ -524,6 +852,24 @@ def main():
                         help="Enable KDC-CA trust-on-first-use: client consults "
                              "the broker at this Unix socket, has no static "
                              "KDC-CA anchor, and uses auto_fast_armor")
+    parser.add_argument("--client-token", metavar="URI", default=None,
+                        help="PKCS#11 URI of the client identity object "
+                             "(pkcs11:token=...;object=...;type=private"
+                             "?pin-value=...). The certificate on the token "
+                             "is used as the PKINIT client identity; the "
+                             "private key never leaves the token. Realm and "
+                             "principal default to the cert's KRB5 SAN when "
+                             "not given.")
+    parser.add_argument("--client-ca", metavar="FILE", default=None,
+                        help="PEM file of the CA that issued the client "
+                             "certificate (adds a second pkinit_anchors "
+                             "entry to the KDC). Defaults to the issuer "
+                             "certificate on the token.")
+    parser.add_argument("--pkcs11-module", metavar="FILE", default=None,
+                        help="Path of the PKCS#11 module (e.g. a PKCS#11 "
+                             "provider .so) pinned via pkcs11-module-path in "
+                             "the generated OpenSSL config. Defaults to the "
+                             "system p11-kit proxy when present.")
     args = parser.parse_args()
 
     kdc_so = args.kdc_plugin_so or args.plugin_so
@@ -541,14 +887,28 @@ def main():
         key_type=args.key_type,
         pqc_min_algorithm=args.pqc_min_algorithm,
         tofu_broker=args.tofu_broker,
+        client_token=args.client_token,
+        client_ca=args.client_ca,
+        pkcs11_module=args.pkcs11_module,
     )
+    if realm.client_token:
+        realm.load_client_token_identity()
+        if args.realm is None:
+            realm.realm = realm.token_realm
+        if args.principal is None:
+            realm.principal = realm.token_principal
+        print(
+            f"[setup] token identity: {realm.principal}@{realm.realm} "
+            f"(from certificate SAN)",
+            file=sys.stderr,
+        )
     realm.start()
 
     # Client principal (PKINIT only, no password)
-    realm.addprinc(f"{args.principal}@{args.realm}")
+    realm.addprinc(f"{realm.principal}@{realm.realm}")
 
     # Anonymous PKINIT principal
-    realm.addprinc(f"WELLKNOWN/ANONYMOUS@{args.realm}")
+    realm.addprinc(f"WELLKNOWN/ANONYMOUS@{realm.realm}")
 
     # KRB5_TRACE is overridden below to realm.client_trace: kinit/klist run
     # under this env-file and must not write into the KDC's own trace file
@@ -560,11 +920,18 @@ def main():
         if k.startswith("KRB5") and k != "KRB5_TRACE"
     )
     env_lines += f'\nexport KRB5_TRACE="{realm.client_trace}"'
-    env_lines += f'\nexport PKINIT_CLIENT_CERT="{realm.client_cert}"'
-    env_lines += f'\nexport PKINIT_CLIENT_KEY="{realm.client_key}"'
+    if realm.client_token:
+        # Token mode: the plugin loads the identity from the PKCS#11 token at
+        # runtime, so no cert/key file exports. OPENSSL_CONF is exported so
+        # the pkcs11-provider is active in the client shell.
+        env_lines += f'\nexport PKINIT_CLIENT_IDENTITY="{realm.client_token}"'
+        env_lines += f'\nexport OPENSSL_CONF="{realm.openssl_conf}"'
+    else:
+        env_lines += f'\nexport PKINIT_CLIENT_CERT="{realm.client_cert}"'
+        env_lines += f'\nexport PKINIT_CLIENT_KEY="{realm.client_key}"'
     env_lines += f'\nexport PKINIT_CA_CERT="{realm.ca_cert}"'
-    env_lines += f'\nexport PKINIT_REALM="{args.realm}"'
-    env_lines += f'\nexport PKINIT_PRINCIPAL="{args.principal}"'
+    env_lines += f'\nexport PKINIT_REALM="{realm.realm}"'
+    env_lines += f'\nexport PKINIT_PRINCIPAL="{realm.principal}"'
     env_lines += f'\nexport SETUP_PID="{os.getpid()}"'
 
     if args.env_file:

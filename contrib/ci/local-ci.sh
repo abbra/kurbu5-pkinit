@@ -363,6 +363,14 @@ certificates, the other about the key exchange. Setting one does not imply
 or affect the other -- pass --pqc-min-algorithm too if you want a fully
 post-quantum exchange, not just a post-quantum CA.
 
+--token switches the client identity from the generated self-signed client
+cert to a certificate stored on a PKCS#11 token. The private key never
+leaves the token; the client plugin loads it at runtime via the OpenSSL
+pkcs11-provider. The client cert's issuer is anchored on the KDC (a second
+pkinit_anchors entry), either from the token itself or from --client-ca.
+Realm and principal default to the client cert's KRB5 SAN unless you pass
+--realm/--principal.
+
 Options:
   --key-type TYPE          Certificate algorithm for the CA/KDC/client
                             certs (default: ec:P-256) -- what signs them,
@@ -383,6 +391,23 @@ Options:
   --ui MODE                 pkinit-trust-brokerd's --ui, when not --no-tofu
                             (default: auto; auto|gui|tty -- see the module
                             docs at the top of pkinit-trust-brokerd/src/main.rs)
+  --token URI               Use a certificate on a PKCS#11 token as the
+                            PKINIT client identity (the private key never
+                            leaves the token). URI form:
+                            pkcs11:token=...;object=...;type=private
+                            ?pin-value=...  Realm and principal default to
+                            the cert's KRB5 SAN unless given via
+                            --realm/--principal. Requires python3-synta +
+                            python3-synta-krb5, the OpenSSL pkcs11-provider,
+                            and a reachable PKCS#11 module.
+  --client-ca FILE          PEM of the CA that issued the client
+                            certificate; added as a second KDC pkinit_anchors
+                            entry. Defaults to the issuer certificate on the
+                            token.
+  --pkcs11-module FILE      Path of the PKCS#11 module pinned via
+                            pkcs11-module-path in the generated OpenSSL
+                            config. Defaults to the system p11-kit proxy when
+                            present.
 
 Examples:
   $(basename "$0") interactive
@@ -393,6 +418,8 @@ Examples:
                                     # ... and a post-quantum key exchange too
   $(basename "$0") interactive --no-tofu --key-type rsa:2048
   $(basename "$0") interactive --ui tty
+  $(basename "$0") interactive --token "pkcs11:token=MyToken;object=mykey;type=private?pin-value=1234"
+                                    # client identity from a PKCS#11 token
 EOF
 }
 
@@ -404,19 +431,28 @@ run_interactive_playground() {
     fi
 
     local key_type="ec:P-256" pqc_min="" realm="PKINIT.TEST" principal="user" \
-          tofu=1 ui="auto"
+          realm_explicit=0 principal_explicit=0 tofu=1 ui="auto" \
+          token="" client_ca="" pkcs11_module=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --key-type) key_type="$2"; shift 2 ;;
             --pqc-min-algorithm) pqc_min="$2"; shift 2 ;;
-            --realm) realm="$2"; shift 2 ;;
-            --principal) principal="$2"; shift 2 ;;
+            --realm) realm="$2"; realm_explicit=1; shift 2 ;;
+            --principal) principal="$2"; principal_explicit=1; shift 2 ;;
             --no-tofu) tofu=0; shift ;;
             --ui) ui="$2"; shift 2 ;;
+            --token) token="$2"; shift 2 ;;
+            --client-ca) client_ca="$2"; shift 2 ;;
+            --pkcs11-module) pkcs11_module="$2"; shift 2 ;;
             --help|-h) print_interactive_help; return 0 ;;
             *) echo "interactive: unknown option: $1" >&2; print_interactive_help; return 2 ;;
         esac
     done
+
+    if [[ -n "$token" && "$token" != pkcs11:* ]]; then
+        fail "--token must be a pkcs11: URI (got: $token)"
+        return 1
+    fi
 
     step "[interactive] building plugin + broker daemon + ctl (release)"
     cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" \
@@ -454,9 +490,21 @@ run_interactive_playground() {
     local state="$work/trust.state.json"
 
     local setup_args=(
-        --testdir "$testdir" --realm "$realm" --principal "$principal"
+        --testdir "$testdir"
         --plugin-so "$plugin_so" --key-type "$key_type" --env-file "$env_file"
     )
+    # realm/principal: pass them only when the user gave them explicitly (or
+    # when not in token mode), so token mode can derive them from the client
+    # certificate's KRB5 SAN when omitted.
+    if [[ -n "$token" ]]; then
+        [[ "$realm_explicit" == 1 ]] && setup_args+=(--realm "$realm")
+        [[ "$principal_explicit" == 1 ]] && setup_args+=(--principal "$principal")
+        setup_args+=(--client-token "$token")
+        [[ -n "$client_ca" ]] && setup_args+=(--client-ca "$client_ca")
+        [[ -n "$pkcs11_module" ]] && setup_args+=(--pkcs11-module "$pkcs11_module")
+    else
+        setup_args+=(--realm "$realm" --principal "$principal")
+    fi
     [[ -n "$pqc_min" ]] && setup_args+=(--pqc-min-algorithm "$pqc_min")
 
     if [[ "$tofu" == 1 ]]; then
@@ -514,9 +562,14 @@ run_interactive_playground() {
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${BOLD}kurbu5-pkinit playground ready${NC}"
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo "  realm:          $realm"
-    echo "  principal:      $principal@$realm"
-    echo "  cert algorithm: $key_type (CA/KDC/client cert signing -- independent of key exchange below)"
+    echo "  realm:          $PKINIT_REALM"
+    echo "  principal:      $PKINIT_PRINCIPAL@$PKINIT_REALM"
+    if [[ -n "$token" ]]; then
+        echo "  client identity: PKCS#11 token (${token%%\?*})"
+        echo "  cert algorithm:   $key_type (CA/KDC cert signing; client cert is on the token)"
+    else
+        echo "  cert algorithm: $key_type (CA/KDC/client cert signing -- independent of key exchange below)"
+    fi
     if [[ -n "$pqc_min" ]]; then
         echo "  key exchange:   $pqc_min (post-quantum)"
     else
@@ -529,7 +582,11 @@ run_interactive_playground() {
     fi
     echo
     echo "  Try:"
-    echo "    kinit -X X509_user_identity=FILE:\$PKINIT_CLIENT_CERT,\$PKINIT_CLIENT_KEY $principal@$realm"
+    if [[ -n "$token" ]]; then
+        echo "    kinit $PKINIT_PRINCIPAL@$PKINIT_REALM"
+    else
+        echo "    kinit -X X509_user_identity=FILE:\$PKINIT_CLIENT_CERT,\$PKINIT_CLIENT_KEY $PKINIT_PRINCIPAL@$PKINIT_REALM"
+    fi
     echo "    klist"
     [[ "$tofu" == 1 && -x "$ctl" ]] && echo "    $ctl --socket $sock list"
     echo
