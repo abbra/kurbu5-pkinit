@@ -115,7 +115,8 @@ separate client/KDC builds are needed.
 
 Configuration is read from `krb5.conf` using the standard `pkinit_*` options
 under `[libdefaults]` / `[realms]` (client) and `[kdcdefaults]` / `[realms]`
-(KDC):
+(KDC). A value in the realm's stanza takes precedence over the same option in
+`[libdefaults]` / `[kdcdefaults]`:
 
 | Option | Applies to | Purpose |
 |---|---|---|
@@ -128,6 +129,7 @@ under `[libdefaults]` / `[realms]` (client) and `[kdcdefaults]` / `[realms]`
 | `pkinit_eku_checking` | both | `kpClientAuth`, `scLogin`, or `none` |
 | `pkinit_require_freshness_token` | both | Require an RFC 8070 freshness token |
 | `pkinit_pqc_min_algorithm` | both | Minimum ML-KEM strength to offer/accept |
+| `pkinit_require_kem` | both | Refuse classic DH/ECDH, whatever the certificate algorithm (default `false`). The KDC rejects DH/ECDH requests with `KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED`, offering only ML-KEM in the typed data; the client always uses ML-KEM (ML-KEM-768 unless `pkinit_pqc_min_algorithm` says otherwise) and never falls back to DH/ECDH. Leave it off for peers without KEM support, such as MIT's own `pkinit.so`. |
 | `pkinit_allow_upn` | KDC | Accept Microsoft UPN SANs for client authorization |
 | `pkinit_indicator` | KDC | Authentication indicators to attach on successful PKINIT |
 | `pkinit_kdc_trust_tofu` | client | Enable trust-on-first-use of the KDC CA (default `false`) |
