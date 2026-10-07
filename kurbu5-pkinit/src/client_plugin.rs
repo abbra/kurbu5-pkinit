@@ -1,6 +1,6 @@
 use kurbu5_rs::clpreauth::*;
 use kurbu5_rs::{Krb5Error, PluginContext};
-use pkinit_core::client::PkinitClientState;
+use pkinit_core::client::{PkinitClientState, RetryAction};
 use pkinit_core::config::PkinitClientConfig;
 use pkinit_core::constants::{
     KRB5_PREAUTH_FAILED, PA_AS_FRESHNESS, PA_PK_AS_REP, PA_PK_AS_REQ, PA_PKINIT_KX,
@@ -212,27 +212,8 @@ impl ClpreauthModule for PkinitClient {
                     }
                 }
 
-                pkinit_trace!(ctx, "PKINIT client building AS-REQ");
-
                 let nonce = unsafe { (*req.request).nonce };
-                let (ctime, cusec) = callbacks.get_preauth_time(true)?;
-
-                let req_body_der = req
-                    .encoded_request_body
-                    .ok_or(Krb5Error::Custom(libc::EINVAL))?;
-
-                let pa_req_der = state
-                    .build_as_req(nonce, ctime as i64, cusec, req_body_der)
-                    .map_err(|e| {
-                        pkinit_trace!(ctx, "PKINIT client failed to build AS-REQ: {}", e);
-                        Krb5Error::Custom(libc::EINVAL)
-                    })?;
-
-                if let Some(key_exchange) = state.key_exchange() {
-                    pkinit_trace!(ctx, "PKINIT client selected {}", key_exchange);
-                }
-
-                Ok(vec![PaData::new(PA_PK_AS_REQ, pa_req_der)])
+                build_pa_pk_as_req(ctx, callbacks, state, nonce, req.encoded_request_body)
             }
             PA_PK_AS_REP => {
                 pkinit_trace!(ctx, "PKINIT client processing AS-REP");
@@ -336,7 +317,7 @@ impl ClpreauthModule for PkinitClient {
     fn tryagain(
         &mut self,
         ctx: &PluginContext<'_>,
-        _callbacks: &mut ClpreauthCallbacks<'_>,
+        callbacks: &mut ClpreauthCallbacks<'_>,
         req: &TryagainRequest<'_>,
     ) -> Result<Vec<PaData>, Krb5Error> {
         pkinit_trace!(
@@ -345,28 +326,69 @@ impl ClpreauthModule for PkinitClient {
         );
         let state = self.state.as_mut().ok_or(Krb5Error::NoHandle)?;
 
-        if req.error_padata.is_null() {
-            return Ok(vec![]);
+        // The KRB-ERROR's typed data, as (type, value) pairs, from krb5's
+        // null-terminated krb5_pa_data array.
+        let mut typed_data: Vec<(i32, &[u8])> = Vec::new();
+        if !req.error_padata.is_null() {
+            // SAFETY: krb5 passes a null-terminated array of valid krb5_pa_data
+            // pointers that outlives this call.
+            unsafe {
+                let mut p = req.error_padata;
+                while !(*p).is_null() {
+                    let pa = &**p;
+                    let value = if pa.contents.is_null() || pa.length == 0 {
+                        &[][..]
+                    } else {
+                        std::slice::from_raw_parts(pa.contents, pa.length as usize)
+                    };
+                    typed_data.push((pa.pa_type, value));
+                    p = p.add(1);
+                }
+            }
         }
-        let error_padata_ptr = unsafe { *req.error_padata };
-        if error_padata_ptr.is_null() {
-            return Ok(vec![]);
+
+        match state.handle_tryagain_typed_data(&typed_data) {
+            Ok(RetryAction::RetryWithKemAlgorithm(_) | RetryAction::RetryWithDhParams(_)) => {
+                // SAFETY: krb5 passes the AS request being built.
+                let nonce = unsafe { (*req.request).nonce };
+                build_pa_pk_as_req(ctx, callbacks, state, nonce, req.encoded_request_body)
+            }
+            Ok(_) => Err(Krb5Error::NoHandle),
+            Err(e) => {
+                pkinit_trace!(ctx, "PKINIT client cannot retry: {}", e);
+                Err(Krb5Error::Custom(kurbu5_sys::KRB5KDC_ERR_PREAUTH_FAILED))
+            }
         }
-
-        let error_pa = unsafe { &*error_padata_ptr };
-        if error_pa.contents.is_null() || error_pa.length == 0 {
-            return Ok(vec![]);
-        }
-
-        let error_data =
-            unsafe { std::slice::from_raw_parts(error_pa.contents, error_pa.length as usize) };
-
-        let _action = state
-            .handle_tryagain(error_data)
-            .map_err(|_| Krb5Error::NoHandle)?;
-
-        Ok(vec![])
     }
+}
+
+/// Build the PA-PK-AS-REQ for the next AS-REQ with the key exchange
+/// currently selected in `state` -- for the first attempt (`process`) and
+/// for a retry with KDC-supplied parameters (`tryagain`) alike.
+fn build_pa_pk_as_req(
+    ctx: &PluginContext<'_>,
+    callbacks: &mut ClpreauthCallbacks<'_>,
+    state: &mut PkinitClientState,
+    nonce: i32,
+    encoded_request_body: Option<&[u8]>,
+) -> Result<Vec<PaData>, Krb5Error> {
+    pkinit_trace!(ctx, "PKINIT client building AS-REQ");
+
+    let (ctime, cusec) = callbacks.get_preauth_time(true)?;
+    let req_body_der = encoded_request_body.ok_or(Krb5Error::Custom(libc::EINVAL))?;
+
+    let pa_req_der = state
+        .build_as_req(nonce, ctime as i64, cusec, req_body_der)
+        .map_err(|e| {
+            pkinit_trace!(ctx, "PKINIT client failed to build AS-REQ: {}", e);
+            Krb5Error::Custom(libc::EINVAL)
+        })?;
+
+    if let Some(key_exchange) = state.key_exchange() {
+        pkinit_trace!(ctx, "PKINIT client selected {}", key_exchange);
+    }
+
+    Ok(vec![PaData::new(PA_PK_AS_REQ, pa_req_der)])
 }
 
 impl PkinitClient {

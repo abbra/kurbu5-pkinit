@@ -653,21 +653,33 @@ impl PkinitClientState {
         )
     }
 
+    /// [`Self::handle_tryagain_typed_data`] for a DER-encoded `METHOD-DATA`
+    /// (`SEQUENCE OF PA-DATA`).
     pub fn handle_tryagain(&mut self, error_padata_der: &[u8]) -> Result<RetryAction, PkinitError> {
         let padata_list: Vec<synta_krb5::kerberos_v5::PaData> =
             synta::Decoder::new(error_padata_der, synta::Encoding::Der)
                 .decode()
                 .map_err(asn1_err("decode error padata"))?;
+        let typed: Vec<(i32, &[u8])> = padata_list
+            .iter()
+            .map(|pa| (pa.padata_type.get(), pa.padata_value.as_bytes()))
+            .collect();
+        self.handle_tryagain_typed_data(&typed)
+    }
 
-        for pa in &padata_list {
-            let pa_type = pa.padata_type.get();
-
+    /// Decide how to retry after a KRB-ERROR, from its typed data as
+    /// `(type, value)` pairs -- the form krb5 hands a clpreauth module.
+    pub fn handle_tryagain_typed_data(
+        &mut self,
+        typed_data: &[(i32, &[u8])],
+    ) -> Result<RetryAction, PkinitError> {
+        for &(pa_type, value) in typed_data {
             if pa_type == synta_krb5::constants::TD_DH_PARAMETERS {
                 // {{sec-ephemeral-key-errors}}: retry with a different
                 // parameter set from TD-EPHEMERAL-KEY-PARAMETERS-DATA that
                 // satisfies the client's policy, in the KDC's order of
                 // preference; with none, the exchange is terminated.
-                let advertised = parse_td_offered(pa.padata_value.as_bytes())?;
+                let advertised = parse_td_offered(value)?;
                 let sent = self.key_exchange.map(|kex| match kex {
                     KeyExchangeType::Kem(alg) => Offered::Kem(alg),
                     KeyExchangeType::Dh(group) => Offered::Dh(group),
