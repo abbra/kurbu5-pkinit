@@ -71,11 +71,12 @@ impl PkinitKdcState {
     }
 
     /// Proactive advertisement (`PA-PK-AS-REQ-Hint.ephemeralKeyParameters`,
-    /// {{sec-proactive-adv}}): KEM and composite KEM algorithms only.  DH/ECDH
-    /// groups are omitted here — the current client only consumes KEM OIDs
-    /// from this hint, and meaningfully advertising a DH/ECDH group requires
-    /// embedding real domain parameters, which is already done on the
-    /// reactive path in [`Self::build_td_ephemeral_key_params`].
+    /// {{sec-proactive-adv}}): every key-establishment algorithm this KDC
+    /// accepts, in decreasing order of preference -- the same list as
+    /// [`Self::build_td_ephemeral_key_params`]. A client that implements none
+    /// of them must fail rather than try an unadvertised algorithm
+    /// ({{sec-client-alg-selection}}), so omitting an accepted algorithm
+    /// (such as the DH/ECDH groups) would turn such clients away.
     pub fn build_supported_algorithms_hint(&self) -> Vec<u8> {
         self.supported_algorithms_hint.clone()
     }
@@ -452,13 +453,7 @@ impl PkinitKdcState {
 }
 
 fn build_supported_algorithms_hint(config: &PkinitKdcConfig) -> Result<Vec<u8>, PkinitError> {
-    let oids: Vec<&[u32]> = config
-        .supported_kem_algorithms
-        .iter()
-        .chain(&config.supported_composite_kem_algorithms)
-        .map(|alg| alg.oid())
-        .collect();
-    crate::kem_types::encode_pkinit_hint(&oids)
+    crate::kem_types::encode_pkinit_hint_alg_ids(acceptable_key_establishment_alg_ids(config)?)
 }
 
 fn build_td_ephemeral_key_params(config: &PkinitKdcConfig) -> Result<Vec<u8>, PkinitError> {
@@ -467,18 +462,24 @@ fn build_td_ephemeral_key_params(config: &PkinitKdcConfig) -> Result<Vec<u8>, Pk
         .map_err(asn1_err("encode TD params"))
 }
 
-/// Every acceptable `AlgorithmIdentifier` (KEM + composite KEM with absent
-/// parameters per {{sec-alg-id-encoding}}; DH groups and EC curves with
-/// their real domain parameters), for [`build_td_ephemeral_key_params`] to
-/// encode as a single `SEQUENCE OF AlgorithmIdentifier`.
+/// Every acceptable `AlgorithmIdentifier`, in decreasing order of preference
+/// ({{sec-proactive-adv}}): post-quantum before classical, and stronger
+/// before weaker within each family -- pure ML-KEM by NIST category, then
+/// the configured composite KEMs, then EC curves and MODP groups at or above
+/// `dh_min_bits` (none with `require_kem`). KEMs carry absent parameters
+/// ({{sec-alg-id-encoding}}); DH groups and EC curves their real domain
+/// parameters. Shared by the proactive hint and
+/// [`build_td_ephemeral_key_params`].
 fn acceptable_key_establishment_alg_ids(
     config: &PkinitKdcConfig,
 ) -> Result<Vec<synta_certificate::AlgorithmIdentifier<'static>>, PkinitError> {
     use synta::ObjectIdentifier;
     use synta_certificate::AlgorithmIdentifier;
 
-    let kem_ids = config
-        .supported_kem_algorithms
+    let mut pure_kems = config.supported_kem_algorithms.clone();
+    pure_kems.sort_by_key(|alg| std::cmp::Reverse(alg.strength_order()));
+
+    let kem_ids = pure_kems
         .iter()
         .chain(&config.supported_composite_kem_algorithms)
         .map(|alg| {
@@ -490,11 +491,11 @@ fn acceptable_key_establishment_alg_ids(
         });
 
     let group_ids = [
-        DhGroup::Oakley2048,
-        DhGroup::Oakley4096,
-        DhGroup::EcP256,
-        DhGroup::EcP384,
         DhGroup::EcP521,
+        DhGroup::EcP384,
+        DhGroup::EcP256,
+        DhGroup::Oakley4096,
+        DhGroup::Oakley2048,
     ]
     .into_iter()
     .filter(|group| !config.require_kem && group.min_bits() >= config.dh_min_bits)
@@ -998,6 +999,50 @@ mod tests {
                 id.algorithm
             );
         }
+    }
+
+    #[test]
+    fn hint_advertises_every_accepted_algorithm_in_preference_order() {
+        use crate::kem_types::{offered_algorithm, parse_pkinit_hint};
+
+        let (_, kdc_id, trust_store) = generate_test_pki();
+        let server = PkinitKdcState::new(
+            kdc_id,
+            trust_store,
+            PkinitKdcConfig {
+                supported_kem_algorithms: KemAlgorithm::MlKem512.algorithms_at_or_above(),
+                supported_composite_kem_algorithms: vec![KemAlgorithm::MlKem768X25519],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let hint = parse_pkinit_hint(&server.build_supported_algorithms_hint()).unwrap();
+        // Same list, same order, as the reactive TD-EPHEMERAL-KEY-PARAMETERS.
+        let td: Vec<_> = acceptable_key_establishment_alg_ids(&server.config)
+            .unwrap()
+            .iter()
+            .map(|a| offered_algorithm(a).unwrap())
+            .collect();
+        assert_eq!(hint, td);
+
+        // Pure ML-KEM strongest first, then the composite, then the MODP
+        // groups at or above the default 2048-bit floor (with their domain
+        // parameters), strongest first.
+        let kems: Vec<&[u32]> = hint[..4].iter().map(|(oid, _)| oid.as_slice()).collect();
+        assert_eq!(
+            kems,
+            [
+                KemAlgorithm::MlKem1024.oid(),
+                KemAlgorithm::MlKem768.oid(),
+                KemAlgorithm::MlKem512.oid(),
+                KemAlgorithm::MlKem768X25519.oid(),
+            ]
+        );
+        let groups = &hint[4..];
+        assert_eq!(groups.len(), 2, "DH groups accepted must be advertised");
+        assert!(groups.iter().all(|(_, params)| params.is_some()));
+        assert!(groups[0].1.as_ref().unwrap().len() > groups[1].1.as_ref().unwrap().len());
     }
 
     #[test]

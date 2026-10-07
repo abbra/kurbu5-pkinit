@@ -196,7 +196,24 @@ pub(crate) fn der_encode_length(len: usize, out: &mut Vec<u8>) {
     }
 }
 
-/// Encode a `PA-PK-AS-REQ-Hint` containing `ephemeralKeyParameters`.
+/// OID-only form of [`encode_pkinit_hint_alg_ids`] (absent parameters),
+/// for tests.
+#[cfg(test)]
+pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, PkinitError> {
+    let alg_ids: Vec<AlgorithmIdentifier<'_>> = algorithm_oids
+        .iter()
+        .map(|oid| {
+            Ok(AlgorithmIdentifier {
+                algorithm: synta::ObjectIdentifier::new(oid).map_err(asn1_err("OID"))?,
+                parameters: None,
+            })
+        })
+        .collect::<Result<_, PkinitError>>()?;
+    encode_pkinit_hint_alg_ids(alg_ids)
+}
+
+/// Encode a `PA-PK-AS-REQ-Hint` whose `ephemeralKeyParameters` carry full
+/// `AlgorithmIdentifier`s, so DH/ECDH groups keep their domain parameters.
 ///
 /// ```asn1
 /// PA-PK-AS-REQ-Hint ::= SEQUENCE {
@@ -204,30 +221,10 @@ pub(crate) fn der_encode_length(len: usize, out: &mut Vec<u8>) {
 ///     ...
 /// }
 /// ```
-pub(crate) fn encode_pkinit_hint(algorithm_oids: &[&[u32]]) -> Result<Vec<u8>, PkinitError> {
+pub(crate) fn encode_pkinit_hint_alg_ids(
+    alg_ids: Vec<AlgorithmIdentifier<'_>>,
+) -> Result<Vec<u8>, PkinitError> {
     use synta::Encode;
-
-    if algorithm_oids.is_empty() {
-        let mut encoder = synta::Encoder::new(synta::Encoding::Der);
-        let empty_seq: Vec<AlgorithmIdentifier<'_>> = vec![];
-        empty_seq
-            .encode(&mut encoder)
-            .map_err(asn1_err("encode hint"))?;
-        return encoder.finish().map_err(asn1_err("finish hint"));
-    }
-
-    let oids: Vec<synta::ObjectIdentifier> = algorithm_oids
-        .iter()
-        .map(|oid| synta::ObjectIdentifier::new(oid).map_err(asn1_err("OID")))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let alg_ids: Vec<AlgorithmIdentifier<'_>> = oids
-        .iter()
-        .map(|oid| AlgorithmIdentifier {
-            algorithm: oid.clone(),
-            parameters: None,
-        })
-        .collect();
 
     let mut inner_encoder = synta::Encoder::new(synta::Encoding::Der);
     alg_ids
