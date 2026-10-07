@@ -11,6 +11,10 @@ pub struct PkinitClientConfig {
     pub dh_min_bits: u32,
     pub dh_group: DhGroup,
     pub kem_algorithm: Option<KemAlgorithm>,
+    /// Refuse classic DH/ECDH: always use a KEM (ML-KEM-768 unless
+    /// `kem_algorithm` names another) and never fall back to DH/ECDH when the
+    /// KDC offers it, whatever algorithm the client certificate uses.
+    pub require_kem: bool,
     pub identity: Option<String>,
     pub anchors: Vec<String>,
     pub intermediates: Vec<String>,
@@ -32,6 +36,7 @@ impl Default for PkinitClientConfig {
             dh_min_bits: 2048,
             dh_group: DhGroup::Oakley2048,
             kem_algorithm: None,
+            require_kem: false,
             identity: None,
             anchors: Vec::new(),
             intermediates: Vec::new(),
@@ -62,6 +67,12 @@ pub struct PkinitKdcConfig {
     /// floor like `supported_kem_algorithms`): each composite variant pairs
     /// a specific traditional algorithm, so "at or above" doesn't apply.
     pub supported_composite_kem_algorithms: Vec<KemAlgorithm>,
+    /// Reject classic DH/ECDH requests with
+    /// `KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED`, listing only KEM
+    /// algorithms in the typed data, so only a post-quantum key exchange
+    /// succeeds. With no KEM floor configured, every ML-KEM parameter set
+    /// is accepted and advertised.
+    pub require_kem: bool,
 }
 
 impl Default for PkinitKdcConfig {
@@ -80,6 +91,7 @@ impl Default for PkinitKdcConfig {
             auth_indicators: Vec::new(),
             supported_kem_algorithms: Vec::new(),
             supported_composite_kem_algorithms: Vec::new(),
+            require_kem: false,
         }
     }
 }

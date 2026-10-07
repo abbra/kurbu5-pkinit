@@ -48,8 +48,17 @@ impl PkinitKdcState {
     pub fn new(
         identity: PkinitIdentity,
         trust_store: TrustStore,
-        config: PkinitKdcConfig,
+        mut config: PkinitKdcConfig,
     ) -> Result<Self, PkinitError> {
+        // require_kem without a KEM floor: make the implicit "any ML-KEM"
+        // explicit, so it is advertised in the hint and in the typed data
+        // that replaces the (refused) DH/ECDH groups.
+        if config.require_kem
+            && config.supported_kem_algorithms.is_empty()
+            && config.supported_composite_kem_algorithms.is_empty()
+        {
+            config.supported_kem_algorithms = KemAlgorithm::MlKem512.algorithms_at_or_above();
+        }
         let supported_algorithms_hint = build_supported_algorithms_hint(&config)?;
         let td_ephemeral_key_params = build_td_ephemeral_key_params(&config)?;
         Ok(Self {
@@ -217,6 +226,11 @@ impl PkinitKdcState {
                     return Err(PkinitError::KemNonceNotAllowed);
                 }
                 KeyExchangeType::Kem(kem_alg)
+            }
+            None if self.config.require_kem => {
+                return Err(PkinitError::DhParamsRejected(
+                    "classic DH/ECDH key exchange refused: pkinit_require_kem is set".into(),
+                ));
             }
             None => KeyExchangeType::Dh(dh::validate_dh_params(
                 &client_dh_public,
@@ -487,7 +501,7 @@ fn acceptable_key_establishment_alg_ids(
         DhGroup::EcP521,
     ]
     .into_iter()
-    .filter(|group| group.min_bits() >= config.dh_min_bits)
+    .filter(|group| !config.require_kem && group.min_bits() >= config.dh_min_bits)
     .map(group_algorithm_identifier);
 
     kem_ids.chain(group_ids).collect()
@@ -760,6 +774,154 @@ mod tests {
             .unwrap();
 
         assert_eq!(client_key.enctype, server_key.enctype);
+        assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
+    }
+
+    #[test]
+    fn require_kem_rejects_classic_dh_request() {
+        use crate::error::KemErrorClass;
+
+        let (client_id, kdc_id, trust_store) = generate_test_pki();
+        let client_config = PkinitClientConfig {
+            dh_group: DhGroup::EcP256,
+            ..Default::default()
+        };
+        let mut client = PkinitClientState::new(client_id, trust_store.clone(), client_config);
+        client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
+
+        let server = PkinitKdcState::new(
+            kdc_id,
+            trust_store,
+            PkinitKdcConfig {
+                require_kem: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let req_body_der = b"mock-req-body";
+        let ctime = 1719600000i64;
+        let pa_req = client
+            .build_as_req(next_nonce(), ctime, 0, req_body_der)
+            .unwrap();
+        let err = server
+            .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
+            .unwrap_err();
+        assert!(matches!(err, PkinitError::DhParamsRejected(_)));
+        assert_eq!(
+            err.kem_error_class(),
+            KemErrorClass::EphemeralKeyParamsNotAccepted
+        );
+    }
+
+    #[test]
+    fn require_kem_advertises_only_kem_algorithms() {
+        let (_, kdc_id, trust_store) = generate_test_pki();
+        let server = PkinitKdcState::new(
+            kdc_id,
+            trust_store,
+            PkinitKdcConfig {
+                require_kem: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // No KEM floor configured: every pure ML-KEM parameter set is
+        // accepted and advertised, and no DH/ECDH group is offered.
+        assert_eq!(
+            server.config.supported_kem_algorithms,
+            vec![
+                KemAlgorithm::MlKem512,
+                KemAlgorithm::MlKem768,
+                KemAlgorithm::MlKem1024
+            ]
+        );
+        let alg_ids = acceptable_key_establishment_alg_ids(&server.config).unwrap();
+        assert_eq!(alg_ids.len(), 3);
+        for id in &alg_ids {
+            assert!(
+                [
+                    KemAlgorithm::MlKem512,
+                    KemAlgorithm::MlKem768,
+                    KemAlgorithm::MlKem1024
+                ]
+                .iter()
+                .any(|alg| id.algorithm.components() == alg.oid()),
+                "unexpected algorithm offered: {:?}",
+                id.algorithm
+            );
+        }
+    }
+
+    #[test]
+    fn require_kem_full_exchange_with_classical_certificates() {
+        // The point of require_kem: a post-quantum key exchange regardless of
+        // the certificate algorithm (here ECDSA P-256 on both sides).
+        let (client_id, kdc_id, trust_store) = generate_test_pki();
+        let o2k = MockO2K;
+
+        let mut client = PkinitClientState::new(
+            client_id,
+            trust_store.clone(),
+            PkinitClientConfig {
+                require_kem: true,
+                ..Default::default()
+            },
+        );
+        client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
+        let server = PkinitKdcState::new(
+            kdc_id,
+            trust_store,
+            PkinitKdcConfig {
+                require_kem: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let req_body_der = b"mock-req-body";
+        let ctime = 1719600000i64;
+        let nonce = next_nonce();
+        let pa_req = client.build_as_req(nonce, ctime, 0, req_body_der).unwrap();
+        let verified = server
+            .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
+            .unwrap();
+        assert_eq!(
+            verified.key_exchange,
+            KeyExchangeType::Kem(KemAlgorithm::MlKem768)
+        );
+
+        let as_req_der = b"mock-full-as-req";
+        let client_name = "testuser@EXAMPLE.COM";
+        let server_name = "krbtgt/EXAMPLE.COM@EXAMPLE.COM";
+        let (pa_rep, server_key) = server
+            .build_as_rep(
+                &verified,
+                &BuildAsRepParams {
+                    nonce,
+                    enctype: 18,
+                    as_req_der,
+                    client_name,
+                    server_name,
+                },
+                &o2k,
+            )
+            .unwrap();
+        let client_key = client
+            .process_as_rep(
+                &pa_rep,
+                &crate::client::AsRepParams {
+                    nonce,
+                    enctype: 18,
+                    as_req_der,
+                    pa_rep_raw: &pa_rep,
+                    client_name,
+                    server_name,
+                },
+                &o2k,
+            )
+            .unwrap();
         assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
     }
 
