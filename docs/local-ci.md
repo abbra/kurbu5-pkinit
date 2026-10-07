@@ -59,7 +59,7 @@ Token mode in the playground has extra requirements; see
 | `clippy` | `cargo clippy --workspace --all-features -- -D warnings` | `build` |
 | `doc` | `cargo doc --workspace --no-deps --all-features`, with `RUSTDOCFLAGS=-D warnings` | `build` |
 | `test` | `cargo test --workspace --all-features` | `build` |
-| `system-test` | `tests/system/pkinit/run.sh`: `kinit` against an ephemeral KDC, cross-tested with MIT's `pkinit.so` (us-us, us-mit, mit-us, mit-mit). us-us uses an ML-KEM-768 key exchange; the combos involving MIT use classic DH/ECDH, which is all MIT's `pkinit.so` supports | `build` |
+| `system-test` | `tests/system/pkinit/run.sh`: `kinit` against an ephemeral KDC, cross-tested with MIT's `pkinit.so` (us-us, us-mit, mit-us, mit-mit). us-us uses an ML-KEM-768 key exchange; the combos involving MIT use classic DH/ECDH, which is all MIT's `pkinit.so` supports. A second pass has our client offer ML-KEM to MIT's KDC without `pkinit_require_kem`, which must end in a fallback to DH/ECDH after error 65 | `build` |
 | `tofu-test` | `tests/system/pkinit/tofu.sh`: KDC-CA trust-on-first-use scenarios (happy path, denial, MITM, ML-DSA chain, tty prompt), with an HTML report | `build` |
 | `interop-mit-pqc` | Opt-in, not run by `all`: ML-KEM interop against the MIT implementation of the draft, see [below](#interop-with-the-mit-implementation-of-the-draft) | `build` |
 

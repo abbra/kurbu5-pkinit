@@ -336,7 +336,13 @@ job_system_test() {
     fi
 
     echo "Running PKINIT system integration tests…"
-    bash tests/system/pkinit/run.sh
+    bash tests/system/pkinit/run.sh || return 1
+
+    # Our client offering ML-KEM to a KDC that rejects it (stock MIT): with a
+    # traditional certificate and no pkinit_require_kem it must retry with
+    # the DH/ECDH parameters from the KDC's error (draft Section 11).
+    echo "Running KEM-to-DH fallback against MIT's KDC…"
+    bash tests/system/pkinit/run.sh --mit-pqc --no-require-kem --combo mit-us
 }
 
 job_tofu_test() {
