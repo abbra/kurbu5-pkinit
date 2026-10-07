@@ -529,6 +529,31 @@ impl PkinitClientState {
             });
         }
 
+        if kdc_kem_info.kem_algorithm.parameters.is_some() {
+            return Err(PkinitError::Asn1(
+                "KDCKEMInfo.kemAlgorithm parameters must be absent".into(),
+            ));
+        }
+
+        // {{sec-kdf-security}}: derive only with the KDF the KDC *signed*, and
+        // only if the client offered it. The client offers exactly
+        // id-alg-hkdf-with-sha512, the only KDF defined for the KEM path,
+        // whose parameters are absent by definition ({{sec-alg-id-encoding}}).
+        let kdf_alg = &kdc_kem_info.kdf_algorithm;
+        if kdf_alg.algorithm.components() != constants::ID_ALG_HKDF_WITH_SHA512
+            || kdf_alg.parameters.is_some()
+        {
+            return Err(PkinitError::KdfNotOffered(format!(
+                "{} (parameters {})",
+                kdf_alg.algorithm,
+                if kdf_alg.parameters.is_some() {
+                    "present"
+                } else {
+                    "absent"
+                }
+            )));
+        }
+
         let kemct = kdc_kem_info.kemct.as_bytes();
         if kemct.len() != kem_alg.ciphertext_len() {
             return Err(PkinitError::KemCiphertextLengthInvalid {
