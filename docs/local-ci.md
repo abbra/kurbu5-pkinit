@@ -103,8 +103,9 @@ CARGO_TARGET_DIR=/tmp/kurbu5-pkinit-target ./contrib/ci/local-ci.sh all
      `--key-type` and valid for one day;
    - writes `krb5.conf` and `kdc.conf` that load kurbu5-pkinit as the
      `kdcpreauth`, `clpreauth` and `certauth` module, with
-     `pkinit_pqc_min_algorithm` set on both sides (ML-KEM-768 unless
-     `--pqc-min-algorithm` says otherwise);
+     `pkinit_pqc_min_algorithm` (ML-KEM-768 unless `--pqc-min-algorithm`
+     says otherwise) and `pkinit_require_kem = true` on both sides, so a
+     classic DH/ECDH exchange is refused;
    - creates the realm database, the client principal (no password, PKINIT
      only) and `WELLKNOWN/ANONYMOUS`;
    - starts `krb5kdc` listening only on a UNIX domain socket,
@@ -135,7 +136,7 @@ How the client trusts the KDC depends on the mode:
 | Option | Default | Description |
 | --- | --- | --- |
 | `--key-type TYPE` | `ec:P-256` | Algorithm of the CA, KDC and client certificates: `ec:P-256`, `ec:P-384`, `ec:P-521`, `rsa:2048`, `rsa:3072`, `rsa:4096`, `mldsa44`, `mldsa65`, `mldsa87`. This only decides what signs the certificates, not the key exchange. |
-| `--pqc-min-algorithm ALG` | `ML-KEM-768` | Minimum ML-KEM algorithm for the key exchange, set as `pkinit_pqc_min_algorithm` on both sides: `ML-KEM-512`, `ML-KEM-768`, `ML-KEM-1024`, `ML-KEM-768-X25519`, `ML-KEM-768-ECDH-P256`, `ML-KEM-1024-ECDH-P384`. `none` selects classic DH/ECDH instead. |
+| `--pqc-min-algorithm ALG` | `ML-KEM-768` | Minimum ML-KEM algorithm for the key exchange, set as `pkinit_pqc_min_algorithm` on both sides together with `pkinit_require_kem = true`: `ML-KEM-512`, `ML-KEM-768`, `ML-KEM-1024`, `ML-KEM-768-X25519`, `ML-KEM-768-ECDH-P256`, `ML-KEM-1024-ECDH-P384`. `none` selects classic DH/ECDH instead. |
 | `--realm REALM` | `PKINIT.TEST` | Realm name. In token mode, defaults to the realm in the token certificate's SAN. |
 | `--principal NAME` | `user` | Client principal. In token mode, defaults to the principal in the token certificate's SAN. |
 | `--no-tofu` | TOFU on | Skip the broker and give the client a static `pkinit_anchors`. |

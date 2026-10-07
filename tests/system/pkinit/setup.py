@@ -658,7 +658,12 @@ class PkinitRealm:
         db_module_dir = self._find_db_module_dir()
         pqc_line = ""
         if self.pqc_min_algorithm:
-            pqc_line = f"\n                    pkinit_pqc_min_algorithm = {self.pqc_min_algorithm}"
+            # require_kem makes both sides refuse classic DH/ECDH outright,
+            # rather than merely preferring ML-KEM.
+            pqc_line = (
+                f"\n                    pkinit_pqc_min_algorithm = {self.pqc_min_algorithm}"
+                "\n                    pkinit_require_kem = true"
+            )
 
         # Client-side KDC trust: normally a static anchor; under TOFU the client
         # has no KDC-CA anchor and consults the broker instead, and needs
