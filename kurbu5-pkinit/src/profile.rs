@@ -4,7 +4,7 @@ use pkinit_core::constants::{DhGroup, KemAlgorithm};
 
 pub fn read_client_config(profile: &Profile, realm: Option<&str>, config: &mut PkinitClientConfig) {
     if config.identity.is_none()
-        && let Ok(v) = profile.get_string("libdefaults", "pkinit_identities", None, None)
+        && let Ok(Some(v)) = profile.get_string_opt("libdefaults", "pkinit_identities", None)
     {
         config.identity = Some(v);
     }
@@ -52,7 +52,7 @@ pub fn read_client_config(profile: &Profile, realm: Option<&str>, config: &mut P
 
     if let Some(realm) = realm {
         if config.identity.is_none()
-            && let Ok(v) = profile.get_string("realms", realm, Some("pkinit_identities"), None)
+            && let Ok(Some(v)) = profile.get_string_opt("realms", realm, Some("pkinit_identities"))
         {
             config.identity = Some(v);
         }
@@ -221,5 +221,62 @@ fn dh_group_from_min_bits(min_bits: u32) -> DhGroup {
         DhGroup::Oakley2048
     } else {
         DhGroup::Oakley4096
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_client_config;
+    use kurbu5_rs::{Profile, sys};
+    use pkinit_core::config::PkinitClientConfig;
+
+    /// A `pkinit_identities` key placed only under `[realms]` must be read by
+    /// `read_client_config`. Before the `Profile::get_string_opt` fix the
+    /// libdefaults read used `get_string`, which returns `""` for an absent
+    /// key and clobbered the `[realms]` value, leaving an empty identity
+    /// (the token-E2E EINVAL). With `get_string_opt` the absent libdefaults
+    /// key yields `None` and the `[realms]` value wins.
+    ///
+    /// This test sets the process-global `KRB5_CONFIG`; it is the only test
+    /// in this crate that does so.
+    #[test]
+    fn client_identity_read_from_realms_not_clobbered_by_empty_libdefaults() {
+        let dir =
+            std::env::temp_dir().join(format!("kurbu5_pkinit_profile_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let conf = dir.join("krb5.conf");
+        let conf_text = [
+            "[libdefaults]",
+            "    default_realm = PKINIT.TEST",
+            "",
+            "[realms]",
+            "    PKINIT.TEST = {",
+            "        kdc = 127.0.0.1:88",
+            "        pkinit_identities = PKCS11:token=SmokeToken;object=mykey;type=private",
+            "    }",
+        ]
+        .join("\n");
+        std::fs::write(&conf, conf_text + "\n").expect("write temp config");
+        // SAFETY: single-test crate; no other test mutates KRB5_CONFIG concurrently.
+        unsafe { std::env::set_var("KRB5_CONFIG", &conf) };
+
+        // SAFETY: standard krb5 init contract; ctx outlives the profile reads.
+        let mut ctx: sys::krb5_context = std::ptr::null_mut();
+        let code = unsafe { sys::krb5_init_context(&mut ctx) };
+        assert_eq!(code, 0, "krb5_init_context failed");
+        let profile = unsafe { Profile::from_raw_context(ctx) }.expect("profile");
+
+        let mut cfg = PkinitClientConfig::default();
+        read_client_config(&profile, Some("PKINIT.TEST"), &mut cfg);
+        assert_eq!(
+            cfg.identity.as_deref(),
+            Some("PKCS11:token=SmokeToken;object=mykey;type=private")
+        );
+
+        // SAFETY: single-test crate; no other test mutates KRB5_CONFIG concurrently.
+        unsafe { std::env::remove_var("KRB5_CONFIG") };
+        // SAFETY: ctx is no longer needed.
+        unsafe { sys::krb5_free_context(ctx) };
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
