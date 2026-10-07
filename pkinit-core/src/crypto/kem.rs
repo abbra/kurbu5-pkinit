@@ -35,7 +35,12 @@ impl KemKeyPair {
 
     /// Decapsulate a KEM ciphertext to recover the shared secret.
     ///
-    /// Takes `self` by value to ensure the private key is erased after use.
+    /// Takes `self` by value so the decapsulation key is dropped as soon as
+    /// this returns. A pure ML-KEM key lives only in OpenSSL's `EVP_PKEY`,
+    /// which OpenSSL cleanses when freed; a composite key is held as PKCS#8
+    /// bytes in `BackendPrivateKey`, which synta-certificate wipes on drop
+    /// from the release carrying "wipe cached PKCS#8 private key bytes on
+    /// drop" onwards.
     pub fn decapsulate(
         self,
         ciphertext: &[u8],
