@@ -338,10 +338,12 @@ impl PkinitClientState {
 
         let client_spki_der = if let Some(kem_alg) = self.config.kem_algorithm {
             self.key_exchange = Some(KeyExchangeType::Kem(kem_alg));
-            if self.kem_key.is_none() {
-                self.kem_key = Some(KemKeyPair::generate(kem_alg)?);
-            }
-            self.kem_key.as_ref().unwrap().public_key_spki_der()?
+            // {{sec-client-request}} step 1: a fresh ephemeral key pair for
+            // every request. Replacing the previous one also drops (erases)
+            // its decapsulation key; the reply always answers the latest
+            // request.
+            let kem_key = self.kem_key.insert(KemKeyPair::generate(kem_alg)?);
+            kem_key.public_key_spki_der()?
         } else {
             self.key_exchange = Some(KeyExchangeType::Dh(self.config.dh_group));
             if self.dh_key.is_none() {
@@ -1368,6 +1370,25 @@ mod tests {
             .build_as_req(1, 1719600000, 0, b"mock-req-body")
             .unwrap_err();
         assert!(matches!(err, PkinitError::DowngradeRejected(_)));
+    }
+
+    #[test]
+    fn every_request_gets_a_fresh_kem_key() {
+        let mut state = client_with_floor(Some(KemAlgorithm::MlKem768));
+        let spki = |state: &mut PkinitClientState| {
+            state
+                .build_as_req(1, 1719600000, 0, b"mock-req-body")
+                .unwrap();
+            state
+                .kem_key
+                .as_ref()
+                .unwrap()
+                .public_key_spki_der()
+                .unwrap()
+        };
+        let first = spki(&mut state);
+        let second = spki(&mut state);
+        assert_ne!(first, second, "the ephemeral encapsulation key was reused");
     }
 
     #[test]
