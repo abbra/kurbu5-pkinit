@@ -3,6 +3,24 @@ use synta_certificate::AlgorithmIdentifier;
 
 use crate::error::{PkinitError, asn1_err};
 
+/// Encode a 32-bit Kerberos nonce for the PKINIT structures that carry it
+/// (`PKAuthenticator.nonce`, `KDCDHKeyInfo.nonce`, `KDCKEMInfo.nonce`), all
+/// `INTEGER (0..4294967295)`. Nonces are held in `i32` storage, as MIT's
+/// `krb5_int32` does, so the bit pattern is reinterpreted as unsigned rather
+/// than encoded as a negative INTEGER.
+pub(crate) fn encode_nonce(nonce: i32) -> Integer {
+    Integer::from(i64::from(nonce as u32))
+}
+
+/// Decode a PKINIT nonce (see [`encode_nonce`]), rejecting values outside
+/// `0..4294967295`, back into `i32` storage.
+pub(crate) fn decode_nonce(value: &Integer) -> Result<i32, PkinitError> {
+    let v = value.as_i64().map_err(asn1_err("nonce"))?;
+    u32::try_from(v)
+        .map(|n| n as i32)
+        .map_err(|_| PkinitError::Asn1(format!("nonce {v} outside 0..4294967295")))
+}
+
 /// KEMRepInfo carries the KDC's KEM response.
 ///
 /// ```asn1
@@ -313,6 +331,21 @@ mod tests {
     use super::*;
     use crate::test_support::next_nonce;
     use synta::ObjectIdentifier;
+
+    #[test]
+    fn nonces_are_encoded_unsigned() {
+        use synta::ToDer;
+        // 0xFFFFFFFF in i32 storage is -1: on the wire it is 4294967295.
+        assert_eq!(
+            encode_nonce(-1).to_der().unwrap(),
+            [0x02, 0x05, 0x00, 0xFF, 0xFF, 0xFF, 0xFF]
+        );
+        for n in [0, 1, i32::MAX, i32::MIN, -1] {
+            assert_eq!(decode_nonce(&encode_nonce(n)).unwrap(), n);
+        }
+        assert!(decode_nonce(&Integer::from(-5i64)).is_err());
+        assert!(decode_nonce(&Integer::from(1i64 << 32)).is_err());
+    }
 
     #[test]
     fn kem_rep_info_roundtrip() {

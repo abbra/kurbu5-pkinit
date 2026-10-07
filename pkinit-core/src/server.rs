@@ -235,7 +235,7 @@ impl PkinitKdcState {
             )?),
         };
 
-        let nonce = pk_auth.nonce.as_i64().map_err(asn1_err("nonce"))? as i32;
+        let nonce = crate::kem_types::decode_nonce(&pk_auth.nonce)?;
 
         let client_dh_nonce = auth_pack
             .client_dhnonce
@@ -317,7 +317,7 @@ impl PkinitKdcState {
                 algorithm: kdf_oid,
                 parameters: None,
             },
-            nonce: Some(synta::Integer::from(params.nonce)),
+            nonce: Some(crate::kem_types::encode_nonce(params.nonce)),
             server_nonce: None,
         };
 
@@ -380,7 +380,7 @@ impl PkinitKdcState {
         let kdc_dh_key_info = synta_krb5::pkinit::KDCDHKeyInfo {
             subject_public_key: synta::BitStringRef::new(&kdc_pub_bits, 0)
                 .map_err(asn1_err("BitStringRef"))?,
-            nonce: synta::Integer::from(nonce),
+            nonce: crate::kem_types::encode_nonce(nonce),
             dh_key_expiration: None,
         };
 
