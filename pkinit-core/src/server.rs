@@ -116,10 +116,31 @@ impl PkinitKdcState {
             synta_krb5::pkinit::PaPkAsReq::from_der(pa_req_der)
                 .map_err(asn1_err("decode PA-PK-AS-REQ"))?;
 
-        let verified_cms = cms::verify_signed_data(pa_req.signed_auth_pack.as_bytes());
+        let signed_auth_pack = pa_req.signed_auth_pack.as_bytes();
 
-        let (auth_pack_der, client_cert_der, is_anonymous) = match verified_cms {
-            Ok(v) => {
+        // An unsigned AuthPack (anonymous PKINIT, {{RFC8062}}) is recognized
+        // structurally: a SignedData with no SignerInfo, or a bare
+        // ContentInfo. Anything else is a signed request, and a signature
+        // that fails to verify is KDC_ERR_INVALID_SIG ({{RFC4556}} Section
+        // 3.2.2) -- never a fallback to the anonymous path. Whether the
+        // requested client principal may use an unsigned AuthPack at all is
+        // the plugin's decision (it alone knows the principal).
+        let unsigned = cms::extract_unsigned_content(signed_auth_pack)
+            .or_else(|_| cms::extract_bare_content(signed_auth_pack))
+            .ok();
+
+        let (auth_pack_der, client_cert_der, is_anonymous) = match unsigned {
+            Some((content, ct)) => {
+                if ct.as_slice() != synta_krb5::pkinit::ID_PKINIT_AUTH_DATA {
+                    return Err(PkinitError::CmsContentTypeMismatch {
+                        expected: "id-pkinit-authData".into(),
+                        actual: format!("{ct:?}"),
+                    });
+                }
+                (content, vec![], true)
+            }
+            None => {
+                let v = cms::verify_signed_data(signed_auth_pack)?;
                 if v.content_type.as_slice() != synta_krb5::pkinit::ID_PKINIT_AUTH_DATA {
                     return Err(PkinitError::CmsContentTypeMismatch {
                         expected: "id-pkinit-authData".into(),
@@ -144,31 +165,6 @@ impl PkinitKdcState {
                 }
 
                 (v.content, v.signer_cert_der, false)
-            }
-            Err(_cms_err) => {
-                let raw = pa_req.signed_auth_pack.as_bytes();
-                let auth_pack_der = if let Ok((content, ct)) = cms::extract_unsigned_content(raw) {
-                    if ct.as_slice() != synta_krb5::pkinit::ID_PKINIT_AUTH_DATA {
-                        return Err(PkinitError::CmsContentTypeMismatch {
-                            expected: "id-pkinit-authData".into(),
-                            actual: format!("{ct:?}"),
-                        });
-                    }
-                    content
-                } else if let Ok((content, ct)) = cms::extract_bare_content(raw) {
-                    if ct.as_slice() != synta_krb5::pkinit::ID_PKINIT_AUTH_DATA {
-                        return Err(PkinitError::CmsContentTypeMismatch {
-                            expected: "id-pkinit-authData".into(),
-                            actual: format!("{ct:?}"),
-                        });
-                    }
-                    content
-                } else {
-                    return Err(PkinitError::CmsVerifyFailed(
-                        "failed to extract anonymous AuthPack from signedAuthPack".into(),
-                    ));
-                };
-                (auth_pack_der, vec![], true)
             }
         };
 
@@ -775,6 +771,41 @@ mod tests {
 
         assert_eq!(client_key.enctype, server_key.enctype);
         assert_eq!(client_key.key_data.as_ref(), server_key.key_data.as_ref());
+    }
+
+    #[test]
+    fn tampered_signature_is_invalid_sig_not_anonymous() {
+        use crate::error::KemErrorClass;
+
+        let (client_id, kdc_id, trust_store) = generate_test_pki();
+        let mut client = PkinitClientState::new(
+            client_id,
+            trust_store.clone(),
+            PkinitClientConfig {
+                dh_group: DhGroup::EcP256,
+                ..Default::default()
+            },
+        );
+        client.set_kdc_identity("krbtgt/EXAMPLE.COM@EXAMPLE.COM".to_string(), None);
+        let server = PkinitKdcState::new(kdc_id, trust_store, PkinitKdcConfig::default()).unwrap();
+
+        let req_body_der = b"mock-req-body";
+        let ctime = 1719600000i64;
+        let mut pa_req = client
+            .build_as_req(next_nonce(), ctime, 0, req_body_der)
+            .unwrap();
+        // PA-PK-AS-REQ carries only signedAuthPack, whose SignerInfo (and
+        // so the signature value) comes last: corrupt its final byte.
+        *pa_req.last_mut().unwrap() ^= 0x01;
+
+        let err = server
+            .verify_as_req(&pa_req, Some(req_body_der), 300, ctime)
+            .expect_err("a corrupted signature must not verify, nor pass as anonymous");
+        assert_eq!(
+            err.kem_error_class(),
+            KemErrorClass::InvalidSignature,
+            "{err}"
+        );
     }
 
     #[test]

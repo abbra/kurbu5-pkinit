@@ -280,6 +280,15 @@ impl PkinitKdc {
             KemErrorClass::PreauthFailed => {
                 VerifyResponse::err(kurbu5_sys::KRB5KDC_ERR_PREAUTH_FAILED)
             }
+            KemErrorClass::InvalidSignature => {
+                VerifyResponse::err(kurbu5_sys::KRB5KDC_ERR_INVALID_SIG)
+            }
+            KemErrorClass::ClientNotTrusted => {
+                VerifyResponse::err(kurbu5_sys::KRB5KDC_ERR_CLIENT_NOT_TRUSTED)
+            }
+            KemErrorClass::InconsistentKeyPurpose => {
+                VerifyResponse::err(kurbu5_sys::KRB5KDC_ERR_INCONSISTENT_KEY_PURPOSE)
+            }
             KemErrorClass::Other => VerifyResponse::err(libc::EINVAL),
         }
     }
