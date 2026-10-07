@@ -217,6 +217,35 @@ pub fn build_pq_signing_identity() -> (Vec<u8>, Vec<u8>) {
     build_signing_identity(generate_ml_dsa_key(c"ML-DSA-65"), "Test PQ Signer")
 }
 
+/// An ML-DSA-65 leaf certificate issued by an ECDSA P-256 CA: the subject's
+/// own key is post-quantum while the issuer's signature on it is not. Pairs
+/// with [`build_pq_kdc_chain`] (the reverse) for tests that must judge a
+/// certificate by its own key, not by its issuer's signature.
+pub fn build_pq_leaf_under_classical_ca() -> Vec<u8> {
+    let ca_key = generate_ec_key();
+    let ca_spki = ca_key.public_key_to_der().unwrap();
+    let ca_name = NameBuilder::new()
+        .common_name("Test EC CA")
+        .build()
+        .unwrap();
+    let leaf_key = generate_ml_dsa_key(c"ML-DSA-65");
+    let leaf_spki = leaf_key.public_key_to_der().unwrap();
+    let leaf_name = NameBuilder::new()
+        .common_name("Test PQ Leaf")
+        .build()
+        .unwrap();
+    sign_cert(
+        &ca_key,
+        &leaf_name,
+        &ca_name,
+        &leaf_spki,
+        &ca_spki,
+        2,
+        false,
+        &[],
+    )
+}
+
 /// A self-signed (cert_der, key_pkcs8_der) pair signed with ECDSA P-256, for
 /// downgrade-prevention tests that need a traditional (non-PQ) signer.
 pub fn build_classical_signing_identity() -> (Vec<u8>, Vec<u8>) {

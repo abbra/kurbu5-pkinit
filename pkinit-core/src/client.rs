@@ -827,19 +827,33 @@ fn rebuild_spki(group: DhGroup, pub_key_bits: &[u8]) -> Result<Vec<u8>, PkinitEr
     spki.to_der().map_err(asn1_err("encode SPKI"))
 }
 
+/// Quantum-resistant signature algorithms for {{sec-downgrade}}: ML-DSA
+/// ({{RFC9881}}) and composite ML-DSA (draft-ietf-lamps-pq-composite-sigs).
+/// The same OIDs identify both the signature algorithm and the public key.
 fn is_pq_signature_algorithm(oid: &[u32]) -> bool {
     oid == constants::ID_ML_DSA_44
         || oid == constants::ID_ML_DSA_65
         || oid == constants::ID_ML_DSA_87
+        || synta_certificate::crypto::composite_mldsa::composite_spec_from_oid(oid).is_some()
 }
 
+/// Whether a signing certificate is post-quantum, i.e. whether its own
+/// subject key -- the one that signs the AuthPack -- is a quantum-resistant
+/// signature key. The algorithm the *issuer* signed the certificate with is
+/// irrelevant here: an ECDSA key certified by an ML-DSA CA still produces
+/// classical signatures.
 pub fn is_pq_signing_certificate(cert_der: &[u8]) -> bool {
     let cert = match synta_certificate::Certificate::from_der(cert_der) {
         Ok(c) => c,
         Err(_) => return false,
     };
-    let sig_alg_oid = cert.tbs_certificate.signature.algorithm.components();
-    is_pq_signature_algorithm(sig_alg_oid)
+    let key_alg_oid = cert
+        .tbs_certificate
+        .subject_public_key_info
+        .algorithm
+        .algorithm
+        .components();
+    is_pq_signature_algorithm(key_alg_oid)
 }
 
 #[cfg(test)]
@@ -1390,6 +1404,27 @@ mod tests {
         let bogus_rep = [0xA2, 0x03, 0x01, 0x02, 0x03];
         assert!(state.process_kem_rep(&bogus_rep, &params, &NoO2K).is_err());
         assert!(state.kem_key.is_none());
+    }
+
+    #[test]
+    fn pq_certificate_is_judged_by_its_own_key() {
+        // An EC key certified by an ML-DSA CA signs classically: not PQ.
+        let pq_issued_ec_leaf = crate::test_support::build_pq_kdc_chain("EXAMPLE.COM");
+        assert!(!is_pq_signing_certificate(&pq_issued_ec_leaf.kdc_leaf_der));
+        // An ML-DSA key certified by an EC CA signs with ML-DSA: PQ.
+        let ec_issued_pq_leaf = crate::test_support::build_pq_leaf_under_classical_ca();
+        assert!(is_pq_signing_certificate(&ec_issued_pq_leaf));
+    }
+
+    #[test]
+    fn composite_ml_dsa_counts_as_quantum_resistant() {
+        // id-MLDSA65-ECDSA-P256-SHA512 and id-MLDSA87-ECDSA-P521-SHA512.
+        assert!(is_pq_signature_algorithm(&[1, 3, 6, 1, 5, 5, 7, 6, 45]));
+        assert!(is_pq_signature_algorithm(&[1, 3, 6, 1, 5, 5, 7, 6, 54]));
+        // Composite ML-KEM shares the arc but is not a signature algorithm.
+        assert!(!is_pq_signature_algorithm(&[1, 3, 6, 1, 5, 5, 7, 6, 58]));
+        // ecdsa-with-SHA256.
+        assert!(!is_pq_signature_algorithm(&[1, 2, 840, 10045, 4, 3, 2]));
     }
 
     #[test]
