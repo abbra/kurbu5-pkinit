@@ -105,7 +105,8 @@ CARGO_TARGET_DIR=/tmp/kurbu5-pkinit-target ./contrib/ci/local-ci.sh all
      `kdcpreauth`, `clpreauth` and `certauth` module, with
      `pkinit_pqc_min_algorithm` (ML-KEM-768 unless `--pqc-min-algorithm`
      says otherwise) and `pkinit_require_kem = true` on both sides, so a
-     classic DH/ECDH exchange is refused;
+     classic DH/ECDH exchange is refused. A composite (hybrid) KEM is also
+     listed in the KDC's `pkinit_pqc_composite_algorithms`;
    - creates the realm database, the client principal (no password, PKINIT
      only) and `WELLKNOWN/ANONYMOUS`;
    - starts `krb5kdc` listening only on a UNIX domain socket,

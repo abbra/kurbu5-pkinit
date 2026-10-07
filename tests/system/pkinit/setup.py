@@ -33,6 +33,15 @@ REALM = "PKINIT.TEST"
 DEFAULT_PQC_MIN_ALGORITHM = "ML-KEM-768"
 CLASSIC_KEX = "none"
 
+# Composite (hybrid) KEMs are explicit opt-in on the KDC: a composite
+# pkinit_pqc_min_algorithm only sets the pure ML-KEM floor there, so the KDC
+# must also list the algorithm in pkinit_pqc_composite_algorithms.
+COMPOSITE_KEM_ALGORITHMS = (
+    "ML-KEM-768-X25519",
+    "ML-KEM-768-ECDH-P256",
+    "ML-KEM-1024-ECDH-P384",
+)
+
 # The KDC listens on a UNIX domain socket (MIT krb5 1.22+) rather than a TCP/UDP
 # port, so any number of test realms can run side by side without port
 # allocation. sun_path holds 108 bytes including the terminating NUL.
@@ -664,6 +673,12 @@ class PkinitRealm:
                 f"\n                    pkinit_pqc_min_algorithm = {self.pqc_min_algorithm}"
                 "\n                    pkinit_require_kem = true"
             )
+        kdc_pqc_line = pqc_line
+        if (self.pqc_min_algorithm or "").upper() in COMPOSITE_KEM_ALGORITHMS:
+            kdc_pqc_line += (
+                "\n                    pkinit_pqc_composite_algorithms = "
+                f"{self.pqc_min_algorithm}"
+            )
 
         # Client-side KDC trust: normally a static anchor; under TOFU the client
         # has no KDC-CA anchor and consults the broker instead, and needs
@@ -768,7 +783,7 @@ class PkinitRealm:
                     pkinit_identity = {kdc_identity}
                     pkinit_anchors = {kdc_anchor_line}
                     default_principal_flags = +preauth
-                    pkinit_eku_checking = none{pqc_line}
+                    pkinit_eku_checking = none{kdc_pqc_line}
                 }}
 
             [logging]
