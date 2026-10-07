@@ -409,6 +409,8 @@ Options:
                             config. Defaults to the system p11-kit proxy when
                             present.
 
+See docs/local-ci.md for a walkthrough of the playground.
+
 Examples:
   $(basename "$0") interactive
   $(basename "$0") interactive --key-type mldsa65
@@ -673,7 +675,8 @@ Special targets:
   interactive  Start an ephemeral KDC (and, unless --no-tofu, the trust
                broker), then drop you into a shell to play with them;
                torn down when the shell exits. Run
-               '$(basename "$0") interactive --help' for its own options.
+               '$(basename "$0") interactive --help' for its own options,
+               and see docs/local-ci.md for the full guide.
 
 Available jobs:
 $(printf '  %s\n' "${ALL_JOBS[@]}")

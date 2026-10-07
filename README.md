@@ -282,6 +282,12 @@ system test that spins up an ephemeral KDC and exercises `kinit` against
 this plugin (including cross-testing against the MIT `pkinit.so`) lives in
 `tests/system/pkinit/run.sh`.
 
+`contrib/ci/local-ci.sh` runs the CI jobs locally, and its `interactive`
+target starts a throwaway realm with a kurbu5-pkinit KDC and the trust broker,
+then opens a shell inside it so you can try PKINIT by hand (post-quantum
+certificates and key exchange, TOFU prompts, client identities on PKCS#11
+tokens). See [docs/local-ci.md](docs/local-ci.md).
+
 ## License
 
 Licensed under the MIT license — see [LICENSE](LICENSE).
