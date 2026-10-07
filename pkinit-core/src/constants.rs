@@ -225,12 +225,14 @@ pub use synta_certificate::hkdf_oid_2019_types::ID_ALG_HKDF_WITH_SHA512;
 
 /// CMS eContentType of the KDC-signed `KDCKEMInfo` (`id-pkinit-KEMKeyData`).
 ///
-/// **Provisional.** draft-bokovoy-kitten-pkinit-pqc-02 leaves the arc
-/// `{ id-pkinit TBD-IANA }` unassigned; `.7` is the next free arc after
-/// `id-pkinit-kdf` (`.6`, {{RFC8636}}) and is used here until IANA assigns
-/// one. Peers must agree on it out of band: a KDC and client using
-/// different values reject each other's replies with a content-type
-/// mismatch. Change it here once the assignment is made.
+/// **Provisional.** The draft defines it as `{ id-pkinit TBD }` and requests
+/// value 7 -- the next free arc after `id-pkinit-kdf` (`.6`, {{RFC8636}}) --
+/// from the Kerberos OID registry kept at MIT (krb5-oids.asn), which records
+/// assignments under `kerberosV5` (`1.3.6.1.5.2`); IANA has no registry for
+/// the `id-pkinit` arc. The MIT implementation of the draft uses the same
+/// value. Until the assignment is recorded, peers must agree on it out of
+/// band: a KDC and client using different values reject each other's
+/// replies with a content-type mismatch.
 pub const ID_PKINIT_KEM_KEY_DATA: &[u32] = &[1, 3, 6, 1, 5, 2, 3, 7];
 
 // ML-DSA OIDs (FIPS 204, RFC 9935) — for downgrade prevention checks

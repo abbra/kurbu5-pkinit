@@ -126,9 +126,12 @@ impl PkinitKemSuppPubInfo {
     }
 }
 
-/// Context tag byte for `PA-PK-AS-REP.kemInfo [2] IMPLICIT KemRepInfo`.
+/// Tag byte of `PA-PK-AS-REP.kemInfo [2] KEMRepInfo`.
 ///
-/// Context-specific, constructed, tag number 2 (KemRepInfo is a SEQUENCE).
+/// The arm is EXPLICIT tagged (the `KerberosV5-PK-INIT-SPEC` module
+/// default), not an `IMPLICIT OCTET STRING` like `encKeyPack`: a
+/// context-specific, constructed `[2]` whose content is the DER of the
+/// `KEMRepInfo` SEQUENCE ({{sec-pa-pk-as-rep}}).
 pub(crate) const PA_PK_AS_REP_KEM_TAG: u8 = 0xA2;
 
 /// Check whether a DER-encoded PA-PK-AS-REP begins with the kemInfo `[2]` tag.
@@ -136,10 +139,10 @@ pub fn is_kem_rep(pa_rep_der: &[u8]) -> bool {
     pa_rep_der.first() == Some(&PA_PK_AS_REP_KEM_TAG)
 }
 
-/// Extract the OCTET STRING content from a `[2] IMPLICIT OCTET STRING` wrapper.
+/// Extract the DER-encoded `KEMRepInfo` from a `PA-PK-AS-REP.kemInfo`.
 ///
-/// Parses the TLV, verifies the tag is `[2]`, and returns the value bytes
-/// (which are the DER-encoded KEMRepInfo).
+/// Parses the TLV, verifies the tag is the constructed `[2]`, and returns its
+/// content.
 pub(crate) fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, PkinitError> {
     if !is_kem_rep(pa_rep_der) {
         return Err(PkinitError::Asn1(
@@ -155,7 +158,8 @@ pub(crate) fn decode_kem_rep_content(pa_rep_der: &[u8]) -> Result<Vec<u8>, Pkini
     Ok(pa_rep_der[value_start..value_start + len].to_vec())
 }
 
-/// Encode a KEMRepInfo as a `PA-PK-AS-REP.kemInfo [2] IMPLICIT OCTET STRING`.
+/// Encode a `KEMRepInfo` as `PA-PK-AS-REP.kemInfo`: an EXPLICIT `[2]`
+/// around its DER encoding.
 pub(crate) fn encode_kem_rep_wrapper(kem_rep_info: &KemRepInfo) -> Result<Vec<u8>, PkinitError> {
     let inner_der = kem_rep_info
         .to_der()
@@ -431,6 +435,26 @@ mod tests {
                 0x80, 0x01, 0x12, // [0] IMPLICIT Int32 18
                 0x81, 0x02, b'A', b'B', // [1] IMPLICIT OCTET STRING
                 0x82, 0x02, b'C', b'D', // [2] IMPLICIT OCTET STRING
+            ]
+        );
+    }
+
+    /// Known-answer encoding of `PA-PK-AS-REP.kemInfo [2] KEMRepInfo`: a
+    /// constructed `[2]` (0xA2) around the KEMRepInfo SEQUENCE, whose
+    /// `kemSignedData [0] IMPLICIT OCTET STRING` is a primitive `[0]` (0x80).
+    /// This is the encoding the draft specifies and both implementations
+    /// interoperate with.
+    #[test]
+    fn kem_info_arm_is_explicitly_tagged() {
+        let info = KemRepInfo {
+            kem_signed_data: OctetString::new(b"SD".to_vec()),
+        };
+        assert_eq!(
+            encode_kem_rep_wrapper(&info).unwrap(),
+            [
+                0xa2, 0x06, // [2] EXPLICIT
+                0x30, 0x04, // KEMRepInfo SEQUENCE
+                0x80, 0x02, b'S', b'D', // kemSignedData [0] IMPLICIT
             ]
         );
     }
