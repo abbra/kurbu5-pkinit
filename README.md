@@ -66,7 +66,7 @@ DH/ECDH key agreement and KDF primitives are provided by
 
 | Draft | Role |
 |---|---|
-| [draft-bokovoy-kitten-pkinit-pqc-02](https://datatracker.ietf.org/doc/draft-bokovoy-kitten-pkinit-pqc/02/) | Post-quantum PKINIT key exchange via ML-KEM, with ML-DSA-based downgrade prevention. The draft leaves `id-pkinit-KEMKeyData` to IANA; until it is assigned this implementation uses the provisional `1.3.6.1.5.2.3.7`, so it interoperates only with peers using the same value. |
+| [draft-bokovoy-kitten-pkinit-pqc-02](https://datatracker.ietf.org/doc/draft-bokovoy-kitten-pkinit-pqc/02/) | Post-quantum PKINIT key exchange via ML-KEM, with ML-DSA-based downgrade prevention. Follows the clarifications in the draft's working copy after -02: `PA-PK-AS-REP.kemInfo` is the EXPLICIT `[2] KEMRepInfo` (the encoding the MIT implementation uses too), and `id-pkinit-KEMKeyData` is requested as `{ id-pkinit 7 }` (`1.3.6.1.5.2.3.7`) from the Kerberos OID registry kept at MIT; until it is recorded there the value is provisional, so this implementation interoperates only with peers using the same one. |
 
 ### Other standards
 
