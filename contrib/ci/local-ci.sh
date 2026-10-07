@@ -177,6 +177,8 @@ declare -A JOB_SECS=()
 FAILED_JOBS=()
 
 ALL_JOBS=(build fmt lint-workflows clippy doc test system-test tofu-test)
+# Opt-in jobs: not part of 'all' (network access, long builds).
+EXTRA_JOBS=(interop-mit-pqc)
 
 # Job dependencies — mirrors the 'needs:' fields in .github/workflows/ci.yml.
 # Value is a space-separated list of prerequisite job names.
@@ -187,6 +189,7 @@ declare -A JOB_DEPS=(
     [test]="build"
     [system-test]="build"
     [tofu-test]="build"
+    [interop-mit-pqc]="build"
 )
 
 # ── Utilities ───────────────────────────────────────────────────────────────
@@ -345,6 +348,34 @@ job_tofu_test() {
 
     echo "Running PKINIT KDC-CA trust-on-first-use test (with HTML report)…"
     bash tests/system/pkinit/tofu.sh
+}
+
+job_interop_mit_pqc() {
+    require_cargo || return 1
+    if [[ $has_krb5kdc -eq 0 || $has_openssl -eq 0 || $has_python3 -eq 0 ]]; then
+        fail "interop-mit-pqc requires krb5kdc, openssl, and python3 (as system-test)"
+        return 1
+    fi
+    local t
+    for t in git autoreconf bison gcc make; do
+        command -v "$t" >/dev/null 2>&1 || { fail "interop-mit-pqc requires $t"; return 1; }
+    done
+
+    echo "Building MIT krb5 with the draft-bokovoy-kitten-pkinit-pqc pkinit.so…"
+    local prefix
+    prefix="$(bash contrib/ci/build-mit-pqc.sh)" || return 1
+
+    # ML-KEM between kurbu5-pkinit and the MIT implementation in both
+    # directions, with classical and post-quantum certificates.
+    local rc=0 key_type kex
+    for key_type in ec:P-256 mldsa65; do
+        for kex in ML-KEM-768 ML-KEM-1024; do
+            echo "Interop: certificates $key_type, key exchange $kex"
+            bash tests/system/pkinit/run.sh --krb5-prefix "$prefix" --mit-pqc \
+                --key-type "$key_type" --pqc-min-algorithm "$kex" || rc=1
+        done
+    done
+    return $rc
 }
 
 print_interactive_help() {
@@ -616,6 +647,7 @@ dispatch_job() {
         test)           run_job test           job_test ;;
         system-test)    run_job system-test    job_system_test ;;
         tofu-test)      run_job tofu-test      job_tofu_test ;;
+        interop-mit-pqc) run_job interop-mit-pqc job_interop_mit_pqc ;;
         *)
             echo "Unknown job: $1" >&2
             echo "Run '$0 --list' for available jobs." >&2
@@ -684,6 +716,12 @@ Special targets:
 Available jobs:
 $(printf '  %s\n' "${ALL_JOBS[@]}")
 
+Opt-in jobs (not run by 'all'):
+  interop-mit-pqc  Build MIT krb5 with the draft-bokovoy-kitten-pkinit-pqc
+                   pkinit.so (contrib/ci/build-mit-pqc.sh) and run the
+                   system tests against it with ML-KEM in all four
+                   KDC/client combinations
+
 Options:
   --list         Print available job names and exit
   --no-color     Disable ANSI colour output (also: NO_COLOR=1)
@@ -715,7 +753,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 if [[ "${1:-}" == "--list" ]]; then
-    printf '%s\n' all "${ALL_JOBS[@]}"
+    printf '%s\n' all "${ALL_JOBS[@]}" "${EXTRA_JOBS[@]}"
     exit 0
 fi
 

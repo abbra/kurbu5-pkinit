@@ -13,6 +13,7 @@ top-level [README](../README.md).
 
 - [Prerequisites](#prerequisites)
 - [Running CI jobs](#running-ci-jobs)
+- [Interop with the MIT implementation of the draft](#interop-with-the-mit-implementation-of-the-draft)
 - [The interactive playground](#the-interactive-playground)
   - [What it sets up](#what-it-sets-up)
   - [Options](#options)
@@ -60,6 +61,7 @@ Token mode in the playground has extra requirements; see
 | `test` | `cargo test --workspace --all-features` | `build` |
 | `system-test` | `tests/system/pkinit/run.sh`: `kinit` against an ephemeral KDC, cross-tested with MIT's `pkinit.so` (us-us, us-mit, mit-us, mit-mit). us-us uses an ML-KEM-768 key exchange; the combos involving MIT use classic DH/ECDH, which is all MIT's `pkinit.so` supports | `build` |
 | `tofu-test` | `tests/system/pkinit/tofu.sh`: KDC-CA trust-on-first-use scenarios (happy path, denial, MITM, ML-DSA chain, tty prompt), with an HTML report | `build` |
+| `interop-mit-pqc` | Opt-in, not run by `all`: ML-KEM interop against the MIT implementation of the draft, see [below](#interop-with-the-mit-implementation-of-the-draft) | `build` |
 
 Dependencies mirror the workflow's `needs:` fields. When you ask for a job
 whose prerequisite has not run yet, the script runs the prerequisite first. If
@@ -81,6 +83,59 @@ contending with your editor's build:
 ```sh
 CARGO_TARGET_DIR=/tmp/kurbu5-pkinit-target ./contrib/ci/local-ci.sh all
 ```
+
+## Interop with the MIT implementation of the draft
+
+An implementation of draft-bokovoy-kitten-pkinit-pqc for MIT krb5's own
+`pkinit.so` lives on the `draft-bokovoy-kitten-pkinit-pqc` branch of
+<https://github.com/jrisc/krb5>. The opt-in `interop-mit-pqc` job builds it
+and runs the system tests against it with an ML-KEM key exchange, in all four
+KDC/client combinations, with ECDSA and ML-DSA-65 certificates:
+
+```sh
+./contrib/ci/local-ci.sh interop-mit-pqc
+```
+
+It needs network access and the krb5 build dependencies (git, autoconf,
+bison, gcc, make, and the openssl, keyutils, libcom_err and libverto
+development packages).
+
+The two halves can also be run separately:
+
+```sh
+# Clone or update, patch, and build into target/mit-krb5-pqc/prefix.
+# Prints the prefix; does nothing if upstream and the patches are unchanged.
+./contrib/ci/build-mit-pqc.sh
+
+# Run the KDC, admin tools and kinit from that build, and use its pkinit.so
+# for the MIT combos; --mit-pqc gives those combos the ML-KEM key exchange
+# too (without it they stay on classic DH/ECDH).
+bash tests/system/pkinit/run.sh --krb5-prefix target/mit-krb5-pqc/prefix \
+    --mit-pqc --key-type mldsa65 --pqc-min-algorithm ML-KEM-1024
+```
+
+The build goes into a private prefix and never replaces the system krb5.
+`--krb5-prefix` (or `KRB5_PREFIX`) also works with `setup.py` directly.
+
+`contrib/ci/mit-krb5-pqc/*.patch` holds fixes to the MIT branch that interop
+needs but upstream does not carry yet; the build script applies each one, and
+skips it once upstream has it. Currently:
+
+- `0001-KDCKEMInfo-kemct-and-serverNonce-are-EXPLICIT-tagged.patch`: the
+  branch encodes `KDCKEMInfo.kemct` and `serverNonce` IMPLICIT, while draft-02
+  Section 6.3 makes them EXPLICIT. Without it neither side can read the
+  other's `KDCKEMInfo`.
+
+Known differences that are policy, not bugs, so the job does not cover them:
+
+- The MIT client never uses DH/ECDH when its own certificate is
+  post-quantum, even against a KDC that offers nothing else. Draft-02 only
+  forbids falling back *after* sending a KEM key, so `us-mit` with ML-DSA
+  certificates and `--pqc-min-algorithm none` fails.
+- Composite KEMs are named differently: `Composite-ML-KEM-768` /
+  `Composite-ML-KEM-1024` for MIT, `ML-KEM-768-X25519` and friends here.
+  Test realms write one name for both sides, so hybrid KEM interop is not
+  exercised.
 
 ## The interactive playground
 
