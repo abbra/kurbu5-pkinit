@@ -103,15 +103,14 @@ impl KdcpreauthModule for PkinitKdc {
     ) {
         callbacks.send_freshness_token();
 
-        if !self.config.require_kem
-            && self.config.supported_kem_algorithms.is_empty()
-            && self.config.supported_composite_kem_algorithms.is_empty()
-        {
+        // {{sec-proactive-adv}}: the KDC SHOULD always advertise what it
+        // accepts -- DH/ECDH groups included -- not only when a KEM is
+        // configured; clients that do not understand the hint ignore it
+        // ({{RFC4556}} Section 3.4).
+        let Some(hint_der) = self.state.build_supported_algorithms_hint() else {
             respond(Ok(None));
             return;
-        }
-
-        let hint_der = self.state.build_supported_algorithms_hint();
+        };
         pkinit_trace!(
             ctx,
             "PKINIT server advertising supported algorithms in hint"

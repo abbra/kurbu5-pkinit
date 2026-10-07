@@ -38,7 +38,7 @@ pub struct PkinitKdcState {
     /// never changes after construction, so this DER blob is the same on
     /// every call and would otherwise be redundantly rebuilt (OID
     /// validation, ASN.1 encoding) on every AS-REQ lacking PA-DATA.
-    supported_algorithms_hint: Vec<u8>,
+    supported_algorithms_hint: Option<Vec<u8>>,
     /// Cache of [`Self::build_td_ephemeral_key_params`]'s result, for the
     /// same reason — rebuilt otherwise on every rejected AS-REQ.
     td_ephemeral_key_params: Vec<u8>,
@@ -77,7 +77,11 @@ impl PkinitKdcState {
     /// of them must fail rather than try an unadvertised algorithm
     /// ({{sec-client-alg-selection}}), so omitting an accepted algorithm
     /// (such as the DH/ECDH groups) would turn such clients away.
-    pub fn build_supported_algorithms_hint(&self) -> Vec<u8> {
+    ///
+    /// `None` when the KDC accepts nothing it could advertise (no KEM and a
+    /// `dh_min_bits` above every group); the KDC then sends the empty
+    /// padata-value of {{RFC4556}} Section 3.4.
+    pub fn build_supported_algorithms_hint(&self) -> Option<Vec<u8>> {
         self.supported_algorithms_hint.clone()
     }
 
@@ -452,8 +456,14 @@ impl PkinitKdcState {
     }
 }
 
-fn build_supported_algorithms_hint(config: &PkinitKdcConfig) -> Result<Vec<u8>, PkinitError> {
-    crate::kem_types::encode_pkinit_hint_alg_ids(acceptable_key_establishment_alg_ids(config)?)
+fn build_supported_algorithms_hint(
+    config: &PkinitKdcConfig,
+) -> Result<Option<Vec<u8>>, PkinitError> {
+    let alg_ids = acceptable_key_establishment_alg_ids(config)?;
+    if alg_ids.is_empty() {
+        return Ok(None);
+    }
+    crate::kem_types::encode_pkinit_hint_alg_ids(alg_ids).map(Some)
 }
 
 fn build_td_ephemeral_key_params(config: &PkinitKdcConfig) -> Result<Vec<u8>, PkinitError> {
@@ -1057,7 +1067,7 @@ mod tests {
         )
         .unwrap();
 
-        let hint = parse_pkinit_hint(&server.build_supported_algorithms_hint()).unwrap();
+        let hint = parse_pkinit_hint(&server.build_supported_algorithms_hint().unwrap()).unwrap();
         // Same list, same order, as the reactive TD-EPHEMERAL-KEY-PARAMETERS.
         let td: Vec<_> = acceptable_key_establishment_alg_ids(&server.config)
             .unwrap()
