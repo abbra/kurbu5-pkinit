@@ -151,6 +151,11 @@ impl KdcpreauthModule for PkinitKdc {
             }
         };
 
+        if let Err(code) = self.authorize_client(ctx, &verified, callbacks) {
+            respond(VerifyResponse::err(code));
+            return;
+        }
+
         pkinit_trace!(ctx, "PKINIT server negotiated {}", verified.key_exchange);
 
         if !verified.is_anonymous {
@@ -192,6 +197,69 @@ impl KdcpreauthModule for PkinitKdc {
 const KRB5KDC_ERR_EPHEMERAL_KEY_PARAMS_NOT_ACCEPTED: i32 = -1765328319;
 
 impl PkinitKdc {
+    /// Bind a verified request to the client principal it asks a ticket for
+    /// ({{RFC4556}} Section 3.2.2, {{RFC8062}} Section 4.1). The KDC core
+    /// does not do this for a kdcpreauth module, so without it any valid
+    /// certificate -- or an unsigned AuthPack -- would authenticate as any
+    /// principal.
+    ///
+    /// - An unsigned AuthPack carries no client identity, so it is accepted
+    ///   only for the anonymous principal `WELLKNOWN/ANONYMOUS`.
+    /// - A signed AuthPack must come from a certificate whose id-pkinit-san
+    ///   (or, with `pkinit_allow_upn`, Microsoft UPN) names the requested
+    ///   principal; anything else is `KDC_ERR_CLIENT_NAME_MISMATCH`.
+    fn authorize_client(
+        &self,
+        ctx: &PluginContext<'_>,
+        verified: &VerifiedRequest,
+        callbacks: &KdcpreauthCallbacks<'_>,
+    ) -> Result<(), i32> {
+        let Some(client) = callbacks.client_name_principal() else {
+            pkinit_trace!(ctx, "PKINIT server: request has no client principal");
+            return Err(kurbu5_sys::KRB5KDC_ERR_PREAUTH_FAILED);
+        };
+
+        if verified.is_anonymous {
+            if crate::principal::is_anonymous(client) {
+                return Ok(());
+            }
+            pkinit_trace!(
+                ctx,
+                "PKINIT server: request is not signed, but client is not anonymous"
+            );
+            return Err(kurbu5_sys::KRB5KDC_ERR_PREAUTH_FAILED);
+        }
+
+        let client_name = ctx.unparse_principal(client).map_err(|e| {
+            pkinit_trace!(ctx, "PKINIT server: cannot unparse client principal: {}", e);
+            kurbu5_sys::KRB5KDC_ERR_PREAUTH_FAILED
+        })?;
+        match certauth::verify_client_san(
+            &verified.client_cert_der,
+            &client_name,
+            self.config.allow_upn,
+        ) {
+            Ok(certauth::CertauthResult::Authorized) => Ok(()),
+            Ok(certauth::CertauthResult::Rejected(reason)) => {
+                pkinit_trace!(
+                    ctx,
+                    "PKINIT server: client certificate not authorized for {}: {}",
+                    client_name,
+                    reason
+                );
+                Err(kurbu5_sys::KRB5KDC_ERR_CLIENT_NAME_MISMATCH)
+            }
+            Err(e) => {
+                pkinit_trace!(
+                    ctx,
+                    "PKINIT server: cannot read client certificate SANs: {}",
+                    e
+                );
+                Err(kurbu5_sys::KRB5KDC_ERR_CLIENT_NAME_MISMATCH)
+            }
+        }
+    }
+
     /// Map a `verify_as_req` failure to the specific KRB-ERROR code (and, for
     /// the ephemeral-key-parameters case, typed data) the draft mandates,
     /// per draft-bokovoy-kitten-pkinit-pqc {{sec-ephemeral-key-errors}} /
