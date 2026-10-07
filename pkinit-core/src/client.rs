@@ -52,6 +52,21 @@ pub struct PkinitClientState {
     /// Whether the current exchange is anonymous. Only an anonymous exchange
     /// may establish new trust (broker `interactive = true`).
     is_anonymous: bool,
+    /// The configured minimum KEM (`pkinit_pqc_min_algorithm`), fixed at
+    /// construction. `config.kem_algorithm` tracks the algorithm currently
+    /// chosen and moves with the KDC's hint or retry list; this floor does
+    /// not, so the KDC's (unauthenticated) lists can never weaken the
+    /// client's policy ({{sec-unauth-errors}}).
+    kem_floor: Option<KemAlgorithm>,
+}
+
+/// A key-establishment algorithm offered by the KDC, in a
+/// `PA-PK-AS-REQ-Hint` or `TD-EPHEMERAL-KEY-PARAMETERS-DATA`, that this
+/// client implements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Offered {
+    Kem(KemAlgorithm),
+    Dh(DhGroup),
 }
 
 impl PkinitClientState {
@@ -63,6 +78,7 @@ impl PkinitClientState {
         if config.require_kem && config.kem_algorithm.is_none() {
             config.kem_algorithm = Some(KemAlgorithm::MlKem768);
         }
+        let kem_floor = config.kem_algorithm;
         Self {
             identity,
             trust_store,
@@ -76,6 +92,7 @@ impl PkinitClientState {
             key_exchange: None,
             broker: None,
             is_anonymous: false,
+            kem_floor,
         }
     }
 
@@ -204,27 +221,80 @@ impl PkinitClientState {
         self.key_exchange = None;
     }
 
+    /// Select the key exchange for the first attempt from the KDC's
+    /// `PA-PK-AS-REQ-Hint` ({{sec-proactive-adv}}, {{sec-client-alg-selection}}).
+    ///
+    /// The configured KEM is kept when the KDC advertises it; otherwise the
+    /// first advertised algorithm, in the KDC's order of preference, that the
+    /// client implements and its policy accepts is used. When the hint
+    /// advertises nothing acceptable, the attempt fails rather than trying an
+    /// unadvertised algorithm. An empty hint constrains nothing.
     pub fn process_pkinit_hint(&mut self, hint_der: &[u8]) -> Result<(), PkinitError> {
-        let oids = crate::kem_types::parse_pkinit_hint(hint_der)?;
-
-        if oids.is_empty() {
+        let advertised = crate::kem_types::parse_pkinit_hint(hint_der)?;
+        if advertised.is_empty() {
             return Ok(());
         }
+        let offers: Vec<Offered> = advertised
+            .iter()
+            .filter_map(|a| self.recognize(a))
+            .collect();
 
-        if let Some(current_kem) = self.config.kem_algorithm
-            && oids.iter().any(|oid| oid.as_slice() == current_kem.oid())
+        if let Some(current) = self.config.kem_algorithm
+            && offers.contains(&Offered::Kem(current))
+            && self.accepts(Offered::Kem(current))
         {
             return Ok(());
         }
 
-        for oid in &oids {
-            if let Some(kem_alg) = KemAlgorithm::from_oid(oid) {
-                self.set_kem_algorithm(kem_alg);
-                return Ok(());
+        match offers.into_iter().find(|o| self.accepts(*o)) {
+            Some(offered) => {
+                self.apply(offered);
+                Ok(())
             }
+            None => Err(PkinitError::NoAcceptableKeyExchange(
+                "the KDC advertised no key-establishment algorithm acceptable to the client".into(),
+            )),
         }
+    }
 
-        Ok(())
+    /// Map an offered algorithm to one this client implements. DH/ECDH
+    /// groups below `pkinit_dh_min_bits` count as not implemented.
+    fn recognize(&self, (oid, params): &crate::kem_types::OfferedAlgorithm) -> Option<Offered> {
+        if let Some(kem_alg) = KemAlgorithm::from_oid(oid) {
+            return Some(Offered::Kem(kem_alg));
+        }
+        dh::group_from_algorithm_identifier(oid, params.as_deref(), self.config.dh_min_bits)
+            .map(Offered::Dh)
+    }
+
+    /// Whether classic DH/ECDH is acceptable: never with `require_kem`, and
+    /// never for a client with a post-quantum certificate that is committed
+    /// to a KEM -- configured with one, or having sent a KEM key on the
+    /// attempt being retried ({{sec-downgrade}}).
+    fn dh_allowed(&self) -> bool {
+        !self.config.require_kem
+            && !(self.has_pq_certificate()
+                && (self.kem_floor.is_some()
+                    || matches!(self.key_exchange, Some(KeyExchangeType::Kem(_)))))
+    }
+
+    /// The client's own policy, enforced whatever the KDC advertises
+    /// ({{sec-unauth-errors}}): a KEM must meet the configured floor (by NIST
+    /// security category), and DH/ECDH must be allowed at all.
+    fn accepts(&self, offered: Offered) -> bool {
+        match offered {
+            Offered::Kem(alg) => self
+                .kem_floor
+                .is_none_or(|floor| alg.strength_order() >= floor.strength_order()),
+            Offered::Dh(_) => self.dh_allowed(),
+        }
+    }
+
+    fn apply(&mut self, offered: Offered) {
+        match offered {
+            Offered::Kem(alg) => self.set_kem_algorithm(alg),
+            Offered::Dh(group) => self.set_dh_group(group),
+        }
     }
 
     pub fn build_as_req(
@@ -585,40 +655,39 @@ impl PkinitClientState {
             let pa_type = pa.padata_type.get();
 
             if pa_type == synta_krb5::constants::TD_DH_PARAMETERS {
-                let data = pa.padata_value.as_bytes();
+                // {{sec-ephemeral-key-errors}}: retry with a different
+                // parameter set from TD-EPHEMERAL-KEY-PARAMETERS-DATA that
+                // satisfies the client's policy, in the KDC's order of
+                // preference; with none, the exchange is terminated.
+                let advertised = parse_td_offered(pa.padata_value.as_bytes())?;
+                let sent = self.key_exchange.map(|kex| match kex {
+                    KeyExchangeType::Kem(alg) => Offered::Kem(alg),
+                    KeyExchangeType::Dh(group) => Offered::Dh(group),
+                });
+                let offers: Vec<Offered> = advertised
+                    .iter()
+                    .filter_map(|a| self.recognize(a))
+                    .filter(|o| Some(*o) != sent)
+                    .collect();
 
-                if let Some(kem_alg) = parse_td_kem_algorithm(data) {
-                    self.set_kem_algorithm(kem_alg);
-                    return Ok(RetryAction::RetryWithKemAlgorithm(kem_alg));
+                if let Some(offered) = offers.iter().copied().find(|o| self.accepts(*o)) {
+                    self.apply(offered);
+                    return Ok(match offered {
+                        Offered::Kem(alg) => RetryAction::RetryWithKemAlgorithm(alg),
+                        Offered::Dh(group) => RetryAction::RetryWithDhParams(group),
+                    });
                 }
 
-                if let Some(group) = parse_td_dh_parameters(data, self.config.dh_min_bits) {
-                    // draft-bokovoy-kitten-pkinit-pqc's downgrade-prevention
-                    // rule applies only to a client that both signed with a
-                    // PQ certificate *and* sent a PQ KEM key on the attempt
-                    // being retried — `has_pq_certificate()` alone isn't
-                    // enough, since a PQ-cert client MAY legitimately have
-                    // started on classical DH (cert algorithm and key
-                    // exchange are independently configured). Gate on the
-                    // key-exchange path actually used for that attempt.
-                    if self.config.require_kem {
-                        return Err(PkinitError::DowngradeRejected(
-                            "KDC offered only classic DH/ECDH; pkinit_require_kem is set".into(),
-                        ));
-                    }
-                    if self.has_pq_certificate()
-                        && matches!(self.key_exchange, Some(KeyExchangeType::Kem(_)))
-                    {
-                        return Err(PkinitError::DowngradeRejected(
-                            "client sent a post-quantum KEM key; refusing to fall back to classical DH/ECDH".into(),
-                        ));
-                    }
-                    self.set_dh_group(group);
-                    return Ok(RetryAction::RetryWithDhParams(group));
+                if offers.iter().any(|o| matches!(o, Offered::Dh(_))) {
+                    return Err(PkinitError::DowngradeRejected(if self.config.require_kem {
+                        "KDC offered only classic DH/ECDH; pkinit_require_kem is set".into()
+                    } else {
+                        "client is committed to a post-quantum KEM; refusing to fall back to classical DH/ECDH".into()
+                    }));
                 }
-
-                return Err(PkinitError::KemAlgorithmNotSupported(
-                    "no mutually acceptable key exchange parameters".into(),
+                return Err(PkinitError::NoAcceptableKeyExchange(
+                    "the KDC offered no key-establishment algorithm acceptable to the client"
+                        .into(),
                 ));
             }
 
@@ -711,43 +780,24 @@ fn anchor_vc<'a>(
     ))
 }
 
-fn parse_td_kem_algorithm(data: &[u8]) -> Option<KemAlgorithm> {
+/// Parse `TD-EPHEMERAL-KEY-PARAMETERS-DATA` (`SEQUENCE OF
+/// AlgorithmIdentifier`), in the KDC's order of preference.
+fn parse_td_offered(data: &[u8]) -> Result<Vec<crate::kem_types::OfferedAlgorithm>, PkinitError> {
     let td: synta_krb5::pkinit::TdDhParameters<'_> =
-        synta_krb5::pkinit::TdDhParameters::from_der(data).ok()?;
-
-    for elem in td.0.iter() {
-        let elem_der = elem.to_der().ok()?;
-        let alg_id: synta_certificate::AlgorithmIdentifier<'_> =
-            synta::Decoder::new(&elem_der, synta::Encoding::Der)
-                .decode()
-                .ok()?;
-        if let Some(kem_alg) = KemAlgorithm::from_oid(alg_id.algorithm.components()) {
-            return Some(kem_alg);
-        }
-    }
-    None
-}
-
-fn parse_td_dh_parameters(data: &[u8], min_bits: u32) -> Option<DhGroup> {
-    let td: synta_krb5::pkinit::TdDhParameters<'_> =
-        synta_krb5::pkinit::TdDhParameters::from_der(data).ok()?;
-
-    for elem in td.0.iter() {
-        let elem_der = elem.to_der().ok()?;
-        let alg_id: synta_certificate::AlgorithmIdentifier<'_> =
-            synta::Decoder::new(&elem_der, synta::Encoding::Der)
-                .decode()
-                .ok()?;
-        let params_der = alg_id.parameters.as_ref().and_then(|p| p.to_der().ok());
-        if let Some(group) = dh::group_from_algorithm_identifier(
-            alg_id.algorithm.components(),
-            params_der.as_deref(),
-            min_bits,
-        ) {
-            return Some(group);
-        }
-    }
-    None
+        synta_krb5::pkinit::TdDhParameters::from_der(data)
+            .map_err(asn1_err("decode TD-EPHEMERAL-KEY-PARAMETERS-DATA"))?;
+    td.0.iter()
+        .map(|elem| {
+            let elem_der = elem
+                .to_der()
+                .map_err(asn1_err("encode AlgorithmIdentifier"))?;
+            let alg_id: synta_certificate::AlgorithmIdentifier<'_> =
+                synta::Decoder::new(&elem_der, synta::Encoding::Der)
+                    .decode()
+                    .map_err(asn1_err("decode AlgorithmIdentifier"))?;
+            crate::kem_types::offered_algorithm(&alg_id)
+        })
+        .collect()
 }
 
 /// Rebuild the KDC's SubjectPublicKeyInfo for `group` from its raw public
@@ -983,6 +1033,121 @@ mod tests {
         .unwrap();
         state.process_pkinit_hint(&hint_der).unwrap();
         assert_eq!(state.config.kem_algorithm, Some(KemAlgorithm::MlKem1024));
+    }
+
+    fn client_with_floor(floor: Option<KemAlgorithm>) -> PkinitClientState {
+        PkinitClientState::new(
+            PkinitIdentity {
+                cert_der: vec![],
+                signing_key: None,
+                chain: vec![],
+            },
+            TrustStore::new(),
+            PkinitClientConfig {
+                kem_algorithm: floor,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn hint(algs: &[KemAlgorithm]) -> Vec<u8> {
+        let oids: Vec<&[u32]> = algs.iter().map(|a| a.oid()).collect();
+        crate::kem_types::encode_pkinit_hint(&oids).unwrap()
+    }
+
+    #[test]
+    fn process_pkinit_hint_never_goes_below_the_configured_floor() {
+        // {{sec-unauth-errors}}: the hint is unauthenticated; the client
+        // enforces its own policy and fails when nothing advertised meets it.
+        let mut state = client_with_floor(Some(KemAlgorithm::MlKem1024));
+        let err = state
+            .process_pkinit_hint(&hint(&[KemAlgorithm::MlKem512, KemAlgorithm::MlKem768]))
+            .unwrap_err();
+        assert!(
+            matches!(err, PkinitError::NoAcceptableKeyExchange(_)),
+            "{err}"
+        );
+        assert_eq!(state.config.kem_algorithm, Some(KemAlgorithm::MlKem1024));
+    }
+
+    #[test]
+    fn process_pkinit_hint_takes_first_acceptable_in_kdc_order() {
+        let mut state = client_with_floor(Some(KemAlgorithm::MlKem768));
+        state
+            .process_pkinit_hint(&hint(&[KemAlgorithm::MlKem512, KemAlgorithm::MlKem1024]))
+            .unwrap();
+        assert_eq!(state.config.kem_algorithm, Some(KemAlgorithm::MlKem1024));
+    }
+
+    #[test]
+    fn process_pkinit_hint_fails_when_nothing_advertised_is_implemented() {
+        // {{sec-client-alg-selection}}: MUST fail rather than try an
+        // unadvertised algorithm.
+        let mut state = client_with_floor(None);
+        let unknown: &[u32] = &[1, 3, 6, 1, 4, 1, 99999, 1];
+        let hint_der = crate::kem_types::encode_pkinit_hint(&[unknown]).unwrap();
+        let err = state.process_pkinit_hint(&hint_der).unwrap_err();
+        assert!(
+            matches!(err, PkinitError::NoAcceptableKeyExchange(_)),
+            "{err}"
+        );
+    }
+
+    fn kem_only_td_params(algs: Vec<KemAlgorithm>) -> Vec<u8> {
+        use crate::config::PkinitKdcConfig;
+        use crate::server::PkinitKdcState;
+
+        PkinitKdcState::new(
+            PkinitIdentity {
+                cert_der: vec![],
+                signing_key: None,
+                chain: vec![],
+            },
+            TrustStore::new(),
+            PkinitKdcConfig {
+                supported_kem_algorithms: algs,
+                require_kem: true,
+                ..Default::default()
+            },
+        )
+        .expect("build KDC state")
+        .build_td_ephemeral_key_params()
+    }
+
+    #[test]
+    fn retry_never_goes_below_the_configured_floor() {
+        let mut state = client_with_floor(Some(KemAlgorithm::MlKem1024));
+        state.key_exchange = Some(KeyExchangeType::Kem(KemAlgorithm::MlKem1024));
+        let padata = wrap_as_td_dh_parameters_padata(kem_only_td_params(vec![
+            KemAlgorithm::MlKem512,
+            KemAlgorithm::MlKem768,
+        ]));
+        let err = state.handle_tryagain(&padata).unwrap_err();
+        assert!(
+            matches!(err, PkinitError::NoAcceptableKeyExchange(_)),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn retry_picks_a_different_acceptable_parameter_set() {
+        // The algorithm just rejected is skipped even if listed; the first
+        // remaining one that meets the floor is used.
+        let mut state = client_with_floor(Some(KemAlgorithm::MlKem768));
+        state.key_exchange = Some(KeyExchangeType::Kem(KemAlgorithm::MlKem768));
+        let padata = wrap_as_td_dh_parameters_padata(kem_only_td_params(vec![
+            KemAlgorithm::MlKem512,
+            KemAlgorithm::MlKem768,
+            KemAlgorithm::MlKem1024,
+        ]));
+        let action = state.handle_tryagain(&padata).unwrap();
+        assert!(
+            matches!(
+                action,
+                RetryAction::RetryWithKemAlgorithm(KemAlgorithm::MlKem1024)
+            ),
+            "{action:?}"
+        );
     }
 
     #[test]
