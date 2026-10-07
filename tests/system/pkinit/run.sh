@@ -20,7 +20,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 REALM="${REALM:-PKINIT.TEST}"
 PRINCIPAL="${PRINCIPAL:-user}"
-MIT_PKINIT_SO="${MIT_PKINIT_SO:-/usr/lib64/krb5/plugins/preauth/pkinit.so}"
+MIT_PKINIT_SO="${MIT_PKINIT_SO:-}"
+# Alternative MIT krb5 installation to run everything against (see
+# --krb5-prefix); setup.py reads it from the environment.
+KRB5_PREFIX="${KRB5_PREFIX:-}"
+MIT_PQC=false
 
 COMBO_ARG="all"
 KEY_TYPE="ec:P-256"
@@ -40,7 +44,8 @@ display_help() {
 # values the plugin currently recognizes; anything else is silently ignored.
 local message=$(cat <<-END
 Usage:
-$(basename $0) [--combo combo] [--key-type type] [--pqc-min-algorithm alg] [--show-trace]
+$(basename $0) [--combo combo] [--key-type type] [--pqc-min-algorithm alg]
+           [--krb5-prefix dir] [--mit-pqc] [--show-trace]
 
 where
   --combo combo        -- combination to run [us-us, us-mit, mit-us, mit-mit]
@@ -54,8 +59,16 @@ where
                             ML-KEM-768-X25519, ML-KEM-768-ECDH-P256,
                             ML-KEM-1024-ECDH-P384, none]
                            (default: ML-KEM-768; none -- classic DH/ECDH).
-                           Combos involving MIT pkinit.so always use classic
-                           DH/ECDH: it has no KEM support.
+                           Combos involving MIT pkinit.so use classic DH/ECDH
+                           (stock MIT has no KEM support) unless --mit-pqc.
+  --krb5-prefix dir    -- run the KDC, admin tools and kinit from the MIT krb5
+                           installed under dir, and use its pkinit.so for the
+                           MIT combos (default: \$KRB5_PREFIX; else the system
+                           krb5). E.g. a build of the draft-bokovoy-kitten-
+                           pkinit-pqc MIT implementation.
+  --mit-pqc            -- the MIT pkinit.so implements the draft: run the MIT
+                           combos with the --pqc-min-algorithm key exchange
+                           too, for KEM interop testing.
   --show-trace         -- print the KDC log and the separate KDC-side and
                            client-side KRB5_TRACE output for every combo,
                            not just failed ones. Both traces are always
@@ -75,11 +88,28 @@ while [[ $# -gt 0 ]]; do
         --combo) COMBO_ARG="$2"; shift 2 ;;
         --key-type) KEY_TYPE="$2"; shift 2 ;;
         --pqc-min-algorithm) PQC_MIN_ALGORITHM="$2"; shift 2 ;;
+        --krb5-prefix) KRB5_PREFIX="$2"; shift 2 ;;
+        --mit-pqc) MIT_PQC=true; shift ;;
         --show-trace) SHOW_TRACE=true; shift ;;
         --help) display_help ; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
+
+if [[ -n "$KRB5_PREFIX" ]]; then
+    KRB5_PREFIX="$(cd "$KRB5_PREFIX" && pwd)"
+    export KRB5_PREFIX
+    : "${MIT_PKINIT_SO:=$KRB5_PREFIX/lib/krb5/plugins/preauth/pkinit.so}"
+    # kadmin.local (test 5) runs from this script, not via setup.py.
+    export PATH="$KRB5_PREFIX/sbin:$KRB5_PREFIX/bin:$PATH"
+    export LD_LIBRARY_PATH="$KRB5_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    echo "Using MIT krb5 from $KRB5_PREFIX ($(klist -V 2>/dev/null))"
+fi
+: "${MIT_PKINIT_SO:=/usr/lib64/krb5/plugins/preauth/pkinit.so}"
+
+# Key exchange for the combos involving MIT pkinit.so.
+MIT_KEX="$CLASSIC_KEX"
+$MIT_PQC && MIT_KEX="$PQC_MIN_ALGORITHM"
 
 # -- Helpers --
 
@@ -282,7 +312,7 @@ for combo in "${COMBOS[@]}"; do
             ;;
         us-mit)
             if $HAS_MIT_PKINIT; then
-                run_combo "$combo" "$PLUGIN_SO" "$MIT_PKINIT_SO" "$CLASSIC_KEX"
+                run_combo "$combo" "$PLUGIN_SO" "$MIT_PKINIT_SO" "$MIT_KEX"
             else
                 echo
                 echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
@@ -295,7 +325,7 @@ for combo in "${COMBOS[@]}"; do
             ;;
         mit-us)
             if $HAS_MIT_PKINIT; then
-                run_combo "$combo" "$MIT_PKINIT_SO" "$PLUGIN_SO" "$CLASSIC_KEX"
+                run_combo "$combo" "$MIT_PKINIT_SO" "$PLUGIN_SO" "$MIT_KEX"
             else
                 echo
                 echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
@@ -308,7 +338,7 @@ for combo in "${COMBOS[@]}"; do
             ;;
         mit-mit)
             if $HAS_MIT_PKINIT; then
-                run_combo "$combo" "$MIT_PKINIT_SO" "$MIT_PKINIT_SO" "$CLASSIC_KEX"
+                run_combo "$combo" "$MIT_PKINIT_SO" "$MIT_PKINIT_SO" "$MIT_KEX"
             else
                 echo
                 echo "=== Combo: $combo -- SKIP (MIT pkinit.so not found at $MIT_PKINIT_SO) ==="
