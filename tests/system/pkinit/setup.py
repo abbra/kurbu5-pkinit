@@ -84,6 +84,19 @@ PKCS11_PROVIDER_PATHS = (
     "/usr/lib/s390x-linux-gnu/ossl-modules/pkcs11.so",
     "/usr/lib/ossl-modules/pkcs11.so",
 )
+# OpenSC PKCS#11 spy: a logging proxy module that wraps a real PKCS#11
+# module and records every Cryptoki call it forwards. This is the
+# crypto-auditing source for PKCS#11 traffic today (neither the
+# pkcs11-provider nor kryoptic carries USDT probes for
+# https://github.com/latchset/crypto-auditing to collect).
+PKCS11_SPY_PATHS = (
+    "/usr/lib64/pkcs11/pkcs11-spy.so",
+    "/usr/lib/x86_64-linux-gnu/pkcs11/pkcs11-spy.so",
+    "/usr/lib/aarch64-linux-gnu/pkcs11/pkcs11-spy.so",
+    "/usr/lib/powerpc64le-linux-gnu/pkcs11/pkcs11-spy.so",
+    "/usr/lib/s390x-linux-gnu/pkcs11/pkcs11-spy.so",
+    "/usr/lib/pkcs11/pkcs11-spy.so",
+)
 PKCS11_MODULE_PATHS = (
     "/usr/lib64/pkcs11/p11-kit-proxy.so",
     "/usr/lib/x86_64-linux-gnu/pkcs11/p11-kit-proxy.so",
@@ -241,7 +254,8 @@ class PkinitRealm:
                  key_type="ec:P-256",
                  pqc_min_algorithm=DEFAULT_PQC_MIN_ALGORITHM,
                  tofu_broker=None, client_token=None, client_ca=None,
-                 pkcs11_module=None, krb5_prefix=None, require_kem=True):
+                 pkcs11_module=None, krb5_prefix=None, require_kem=True,
+                 pkcs11_spy=None):
         # realm/principal are None by default so token mode can override them
         # with values derived from the token certificate's KRB5 SAN before
         # any config is written.
@@ -271,6 +285,11 @@ class PkinitRealm:
         self.client_token = client_token
         self.client_ca = client_ca
         self.pkcs11_module = pkcs11_module
+        # Token mode, optional PKCS#11 API audit: route the client's
+        # PKCS#11 traffic through the OpenSC spy proxy and log every
+        # Cryptoki call to this file (crypto-auditing source for the
+        # PKINIT module's token calls; see PKCS11_SPY_PATHS).
+        self.pkcs11_spy_log = os.path.abspath(pkcs11_spy) if pkcs11_spy else None
         self.token_principal = None
         self.token_realm = None
         if client_token:
@@ -397,6 +416,12 @@ class PkinitRealm:
         # Provider config: reuse the caller's OPENSSL_CONF when it exists.
         existing = os.environ.get("OPENSSL_CONF")
         if existing and os.path.isfile(existing):
+            if self.pkcs11_spy_log:
+                raise RuntimeError(
+                    "--pkcs11-spy cannot wrap the pkcs11-provider config from "
+                    f"the existing $OPENSSL_CONF ({existing}); unset it and let "
+                    "setup.py write the config, or add the spy there yourself"
+                )
             self.openssl_conf = existing
         else:
             provider = first_existing(PKCS11_PROVIDER_PATHS)
@@ -406,6 +431,31 @@ class PkinitRealm:
                     + ", ".join(PKCS11_PROVIDER_PATHS)
                 )
             module = self.pkcs11_module or first_existing(PKCS11_MODULE_PATHS)
+            if self.pkcs11_spy_log:
+                # PKCS#11 API audit: the provider loads the OpenSC spy,
+                # which dlopen's the real module (PKCS11SPY) and logs
+                # every call it forwards (PKCS11SPY_OUTPUT). The env
+                # vars are exported for the client shell (see main());
+                # this process needs them too for the storeutl probe
+                # calls below.
+                spy = first_existing(PKCS11_SPY_PATHS)
+                if not spy:
+                    raise RuntimeError(
+                        "--pkcs11-spy requires the OpenSC PKCS#11 spy "
+                        "(dnf install opensc); searched: "
+                        + ", ".join(PKCS11_SPY_PATHS)
+                    )
+                if not module:
+                    raise RuntimeError(
+                        "--pkcs11-spy needs a real module to wrap; "
+                        "pass --pkcs11-module"
+                    )
+                if not os.environ.get("PKCS11SPY"):
+                    os.environ["PKCS11SPY"] = module
+                # Keep setup.py's own storeutl calls out of the audit: the
+                # real output file goes to the client shell via env-file.
+                os.environ["PKCS11SPY_OUTPUT"] = os.devnull
+                module = spy
             lines = [
                 "openssl_conf = openssl_init",
                 "",
@@ -980,6 +1030,11 @@ def main():
                              "provider .so) pinned via pkcs11-module-path in "
                              "the generated OpenSSL config. Defaults to the "
                              "system p11-kit proxy when present.")
+    parser.add_argument("--pkcs11-spy", metavar="FILE", default=None,
+                        help="Token mode: wrap the PKCS#11 module in the "
+                             "OpenSC spy proxy and record every PKCS#11 API "
+                             "call made by the client plugin to FILE "
+                             "(crypto-auditing source; requires opensc)")
     args = parser.parse_args()
 
     kdc_so = args.kdc_plugin_so or args.plugin_so
@@ -1002,6 +1057,7 @@ def main():
         pkcs11_module=args.pkcs11_module,
         krb5_prefix=args.krb5_prefix,
         require_kem=args.require_kem,
+        pkcs11_spy=args.pkcs11_spy,
     )
     if realm.client_token:
         realm.load_client_token_identity()
@@ -1040,6 +1096,9 @@ def main():
         # the pkcs11-provider is active in the client shell.
         env_lines += f'\nexport PKINIT_CLIENT_IDENTITY="{realm.client_token}"'
         env_lines += f'\nexport OPENSSL_CONF="{realm.openssl_conf}"'
+        if realm.pkcs11_spy_log:
+            env_lines += f'\nexport PKCS11SPY="{os.environ["PKCS11SPY"]}"'
+            env_lines += f'\nexport PKCS11SPY_OUTPUT="{realm.pkcs11_spy_log}"'
     else:
         env_lines += f'\nexport PKINIT_CLIENT_CERT="{realm.client_cert}"'
         env_lines += f'\nexport PKINIT_CLIENT_KEY="{realm.client_key}"'
