@@ -26,7 +26,9 @@ def esc(value):
     return html.escape(str(value), quote=True)
 
 
-def badge(passed):
+def badge(passed, skipped=False):
+    if skipped:
+        return "⏭️ SKIP"
     return "✅ PASS" if passed else "❌ FAIL"
 
 
@@ -40,6 +42,7 @@ def truncated_trace(text):
 def render_scenario(sc):
     name = sc.get("title") or sc.get("name") or "scenario"
     passed = bool(sc.get("passed"))
+    skipped = bool(sc.get("skipped"))
     expected = sc.get("expected", "?")
     outcome = sc.get("outcome", "?")
     decision = sc.get("broker_decision", "(unknown)")
@@ -48,7 +51,7 @@ def render_scenario(sc):
     steps = sc.get("steps") or []
     traces = sc.get("traces") or {}
 
-    lines = [f"### {esc(name)} — {badge(passed)}", ""]
+    lines = [f"### {esc(name)} — {badge(passed, skipped)}", ""]
     lines += [
         "| | | | |",
         "|---|---|---|---|",
@@ -86,9 +89,12 @@ def render(manifest):
     scenarios = manifest.get("scenarios") or []
     total = len(scenarios)
     passed = sum(1 for s in scenarios if s.get("passed"))
-    overall_ok = total > 0 and passed == total
-    overall = "ALL PASSED" if overall_ok else f"{passed}/{total} PASSED"
+    skipped = sum(1 for s in scenarios if s.get("skipped"))
+    overall_ok = total > 0 and passed == total - skipped
+    overall = "ALL PASSED" if overall_ok else f"{passed}/{total - skipped} PASSED"
     overall_mark = "✅" if overall_ok else "❌"
+    if skipped:
+        overall += f" ({skipped} skipped)"
 
     lines = [
         "## PKINIT KDC-CA Trust-On-First-Use",

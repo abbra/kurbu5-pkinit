@@ -16,6 +16,7 @@ The manifest is produced by tofu.sh and has the shape:
           "expected": "success" | "failure",
           "outcome":  "success" | "failure",
           "passed":   true | false,
+          "skipped":  true | false,
           "broker_mode": "approve" | "deny" | "interactive" | "seeded",
           "broker_decision": "Trusted" | "Denied" | "Unknown" | "(unknown)",
           "ca_fingerprint": "ab:cd:...",
@@ -38,7 +39,9 @@ def esc(value):
     return html.escape(str(value), quote=True)
 
 
-def badge(passed):
+def badge(passed, skipped=False):
+    if skipped:
+        return '<span class="badge skip">SKIP</span>'
     label = "PASS" if passed else "FAIL"
     cls = "pass" if passed else "fail"
     return f'<span class="badge {cls}">{label}</span>'
@@ -47,6 +50,7 @@ def badge(passed):
 def render_scenario(sc):
     name = sc.get("title") or sc.get("name") or "scenario"
     passed = bool(sc.get("passed"))
+    skipped = bool(sc.get("skipped"))
     expected = sc.get("expected", "?")
     outcome = sc.get("outcome", "?")
     decision = sc.get("broker_decision", "(unknown)")
@@ -66,9 +70,10 @@ def render_scenario(sc):
         for label, text in traces.items()
     )
 
+    section_cls = "skip" if skipped else ("ok" if passed else "bad")
     return f"""
-    <section class="scenario {'ok' if passed else 'bad'}">
-      <h2>{esc(name)} {badge(passed)}</h2>
+    <section class="scenario {section_cls}">
+      <h2>{esc(name)} {badge(passed, skipped)}</h2>
       <table class="meta">
         <tr><th>Expected</th><td>{esc(expected)}</td>
             <th>Outcome</th><td>{esc(outcome)}</td></tr>
@@ -92,8 +97,11 @@ def render(manifest):
     scenarios = manifest.get("scenarios") or []
     total = len(scenarios)
     passed = sum(1 for s in scenarios if s.get("passed"))
-    overall_ok = total > 0 and passed == total
-    overall = "ALL PASSED" if overall_ok else f"{passed}/{total} PASSED"
+    skipped = sum(1 for s in scenarios if s.get("skipped"))
+    overall_ok = total > 0 and passed == total - skipped
+    overall = "ALL PASSED" if overall_ok else f"{passed}/{total - skipped} PASSED"
+    if skipped:
+        overall += f" ({skipped} skipped)"
 
     body = "\n".join(render_scenario(s) for s in scenarios)
 
@@ -117,11 +125,13 @@ def render(manifest):
               padding: 1rem 1.2rem; margin-bottom: 1.5rem; }}
   .scenario.ok {{ border-left: 6px solid #22c55e; }}
   .scenario.bad {{ border-left: 6px solid #ef4444; }}
+  .scenario.skip {{ border-left: 6px solid #94a3b8; }}
   h2 {{ font-size: 1.15rem; display: flex; align-items: center; gap: 0.6rem; }}
   .badge {{ font-size: 0.75rem; font-weight: 700; padding: 0.1rem 0.5rem;
            border-radius: 0.3rem; }}
   .badge.pass {{ background: #22c55e; color: #052e16; }}
   .badge.fail {{ background: #ef4444; color: #450a0a; }}
+  .badge.skip {{ background: #94a3b8; color: #0f172a; }}
   table.meta {{ border-collapse: collapse; margin: 0.5rem 0 1rem; width: 100%; }}
   table.meta th {{ text-align: left; color: #6b7280; font-weight: 600;
                   padding: 0.2rem 0.8rem 0.2rem 0; white-space: nowrap; }}

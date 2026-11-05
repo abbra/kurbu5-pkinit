@@ -10,7 +10,8 @@ each with:
     meta.env   key=value lines: name, title, expected, outcome, broker_mode,
                broker_decision, ca_fingerprint
     steps.txt  one timeline step per line (optional)
-    client-trace.log / kdc-trace.log / broker.log / client-tty.log  (optional)
+    client-trace.log / kdc-trace.log / broker.log / client-tty.log /
+    pkcs11_sequence.txt  (optional)
 
 The `passed` flag is derived as (outcome == expected). The output JSON matches
 the shape consumed by tofu_report.py.
@@ -26,6 +27,10 @@ TRACE_FILES = [
     ("KDC trace", "kdc-trace.log"),
     ("Broker log", "broker.log"),
     ("Client TTY session", "client-tty.log"),
+    # The PKCS#11 API call sequence, generated from the --pkcs11-spy audit
+    # log by pkcs11_sequence.py for scenarios that run with a token
+    # identity. Present only for those.
+    ("PKCS#11 API sequence", "pkcs11_sequence.txt"),
 ]
 
 META_KEYS = [
@@ -79,7 +84,11 @@ def build_scenario(scenario_dir):
             traces[label] = text
     sc["traces"] = traces
 
-    sc["passed"] = sc["expected"] != "" and sc["expected"] == sc["outcome"]
+    # A scenario the runner's environment cannot support (e.g. no PKCS#11
+    # token stack) is recorded with expected=outcome="skipped" and reported
+    # as skipped, not as a failure.
+    sc["skipped"] = sc["expected"] == "skipped"
+    sc["passed"] = not sc["skipped"] and sc["expected"] == sc["outcome"]
     return sc
 
 
