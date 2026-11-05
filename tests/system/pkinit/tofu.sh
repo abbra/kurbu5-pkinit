@@ -20,9 +20,18 @@
 #                  and the "user" confirms trust for 1 day by answering the
 #                  prompt on kinit's own controlling terminal (a real pty --
 #                  see pty_kinit.py), not --auto approve                   -> PASS
+#   pq-token-flow  a fully post-quantum chain whose client identity lives on
+#                  a local kryoptic PKCS#11 token (ML-DSA-65 key generated
+#                  inside the token, certificate issued by the test CA and
+#                  imported onto it). The client's PKCS#11 traffic runs
+#                  through the OpenSC pkcs11-spy so the report carries the
+#                  exact PKCS#11 API call sequence the plugin made (the
+#                  crypto-auditing feed; see docs/local-ci.md). Skipped when
+#                  kryoptic / pkcs11-spy / pkcs11-tool are not installed.   -> PASS
 #
 # Usage:
 #   bash tofu.sh [--report FILE]
+#
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --report) REPORT_HTML="$2"; shift 2 ;;
         --help|-h)
-            sed -n '2,20p' "$0"; exit 0 ;;
+            sed -n '2,33p' "$0"; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -52,6 +61,11 @@ require_tools() {
     fi
 }
 require_tools python3 openssl krb5kdc kdb5_util kadmin.local kinit klist
+
+# The report embeds the parsed PKCS#11 call sequence in every CI run, even
+# where the token scenario itself is skipped; check the parser up front so a
+# broken parser fails the job instead of the report.
+python3 "$SCRIPT_DIR/pkcs11_sequence.py" --selftest
 
 # -- Build plugin + broker daemon (release) --
 
@@ -71,8 +85,66 @@ mkdir -p "$REPORTDIR"
 cleanup() { [[ -n "${KEEP_WORK:-}" ]] && { echo "KEEP_WORK set; leaving $WORK"; return; }; rm -rf "$WORK"; }
 trap cleanup EXIT
 
+# -- PKCS#11 token (pq-token-flow prereqs) --
+#
+# The token scenario needs a local software token, not hardware: kryoptic is
+# the one the rest of the suite uses (same module discovery and provisioning
+# recipe as pkinit-core/tests/pkcs11_identity.rs). Any piece missing --
+# including a runner whose container lacks the packages -- skips that one
+# scenario rather than failing the run.
+
+first_existing() {
+    local p
+    for p in "$@"; do
+        [[ -f "$p" ]] && { echo "$p"; return; }
+    done
+}
+
+KRYOPTIC_MODULE="$(first_existing \
+    /usr/lib64/pkcs11/libkryoptic_pkcs11.so \
+    /usr/lib/x86_64-linux-gnu/pkcs11/libkryoptic_pkcs11.so \
+    /usr/lib/aarch64-linux-gnu/pkcs11/libkryoptic_pkcs11.so)"
+PKCS11_SPY_MODULE="$(first_existing \
+    /usr/lib64/pkcs11/pkcs11-spy.so \
+    /usr/lib/x86_64-linux-gnu/pkcs11/pkcs11-spy.so \
+    /usr/lib/aarch64-linux-gnu/pkcs11/pkcs11-spy.so)"
+PKCS11_PROVIDER_MODULE="$(first_existing \
+    /usr/lib64/ossl-modules/pkcs11.so \
+    /usr/lib/x86_64-linux-gnu/ossl-modules/pkcs11.so \
+    /usr/lib/aarch64-linux-gnu/ossl-modules/pkcs11.so)"
+
+TOKEN_LABEL="PKINIT-TOFU"
+TOKEN_OBJECT="clientkey"
+TOKEN_USER_PIN="123456"
+TOKEN_SO_PIN="sopin12"
+TOKEN_URI="pkcs11:token=${TOKEN_LABEL};object=${TOKEN_OBJECT};type=private?pin-value=${TOKEN_USER_PIN}"
+
+token_flow_supported() {
+    [[ -n "$KRYOPTIC_MODULE" && -n "$PKCS11_SPY_MODULE" &&
+       -n "$PKCS11_PROVIDER_MODULE" ]] && command -v pkcs11-tool >/dev/null
+}
+
+provision_kryoptic_token() {
+    export KRYOPTIC_CONF="$WORK/kryoptic.conf"
+    cat > "$KRYOPTIC_CONF" <<EOF
+[ec_point_encoding]
+encoding = "Bytes"
+[[slots]]
+slot = 1
+description = "$TOKEN_LABEL"
+dbtype = "sqlite"
+dbargs = "$WORK/kryoptic.db"
+EOF
+    pkcs11-tool --module "$KRYOPTIC_MODULE" \
+        --init-token --label "$TOKEN_LABEL" --so-pin "$TOKEN_SO_PIN" &&
+    pkcs11-tool --module "$KRYOPTIC_MODULE" \
+        --init-pin --token-label "$TOKEN_LABEL" --so-pin "$TOKEN_SO_PIN" \
+        --pin "$TOKEN_USER_PIN"
+}
+
 PASS=0
 FAIL=0
+SKIP=0
 
 ca_fingerprint() {
     # Plain lowercase hex SHA-256 of the CA certificate DER (matches the
@@ -81,7 +153,7 @@ ca_fingerprint() {
         | openssl dgst -sha256 2>/dev/null | awk '{print $NF}'
 }
 
-# run_scenario NAME TITLE EXPECTED MODE [SEED_BOGUS] [KEY_TYPE] [ANSWER]
+# run_scenario NAME TITLE EXPECTED MODE [SEED_BOGUS] [KEY_TYPE] [ANSWER] [TOKEN]
 #   EXPECTED   success | failure
 #   MODE       approve | deny | interactive
 #              approve/deny: --auto value for the broker (non-interactive).
@@ -95,9 +167,15 @@ ca_fingerprint() {
 #   ANSWER     line to type at the broker's tty prompt when MODE is
 #              interactive (e.g. "3" for the "1 day" grant preset); ignored
 #              otherwise
+#   TOKEN      the PKCS#11 URI of a provisioned token, given to setup.py as
+#              --client-token with --client-token-generate: the client's key
+#              is generated inside the token by KEY_TYPE and the certificate
+#              issued by this run's CA and imported onto it. The client's
+#              PKCS#11 traffic is then wrapped in the pkcs11-spy, and the
+#              resulting call sequence is attached to the report.
 run_scenario() {
     local name="$1" title="$2" expected="$3" mode="$4" seed="${5:-}" \
-          key_type="${6:-ec:P-256}" answer="${7:-}"
+          key_type="${6:-ec:P-256}" answer="${7:-}" token_uri="${8:-}"
     local dir="$REPORTDIR/$name"
     mkdir -p "$dir"
 
@@ -135,6 +213,16 @@ run_scenario() {
     done
 
     # Start the ephemeral KDC with a TOFU client configuration.
+    local token_args=()
+    local spy_log=""
+    if [[ -n "$token_uri" ]]; then
+        spy_log="$dir/pkcs11-spy.log"
+        token_args=(
+            --client-token "$token_uri" --client-token-generate
+            --pkcs11-module "$KRYOPTIC_MODULE"
+            --pkcs11-spy "$spy_log"
+        )
+    fi
     python3 "$SCRIPT_DIR/setup.py" \
         --testdir "$testdir" \
         --realm "$REALM" \
@@ -142,6 +230,7 @@ run_scenario() {
         --plugin-so "$PLUGIN_SO" \
         --tofu-broker "$sock" \
         --key-type "$key_type" \
+        "${token_args[@]}" \
         --env-file "$env_file" &
     local setup_pid=$!
     local ready=false
@@ -155,6 +244,14 @@ run_scenario() {
     if [[ "$ready" == true ]]; then
         # shellcheck disable=SC1090
         source "$env_file"
+        # File mode passes the identity on the command line; token mode has
+        # it configured as pkinit_identities = PKCS11:<URI> in krb5.conf and
+        # OPENSSL_CONF/PKCS11SPY* exported by the env file, so a plain
+        # kinit already uses the token.
+        local identity_args=()
+        if [[ -z "$token_uri" ]]; then
+            identity_args=(-X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}")
+        fi
         if [[ "$mode" == "interactive" ]]; then
             # Give kinit a real pty so the broker's client-tty prompter has
             # something to find via SO_PEERCRED + /proc/<pid>/fd/*, and
@@ -163,18 +260,24 @@ run_scenario() {
             if KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME="$KRB5CCNAME" \
                python3 "$SCRIPT_DIR/pty_kinit.py" \
                        --answer "$answer" --transcript "$dir/client-tty.log" \
-                       -- kinit -X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}" \
-                                "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" \
+                       -- kinit "${identity_args[@]}" \
+                               "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" \
                >"$dir/kinit.out" 2>&1; then
                 outcome="success"
             fi
         elif KRB5_CONFIG="$KRB5_CONFIG" KRB5CCNAME="$KRB5CCNAME" \
-           kinit -X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}" \
+           kinit "${identity_args[@]}" \
                  "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" </dev/null >"$dir/kinit.out" 2>&1; then
             outcome="success"
         fi
         cp -f "${KRB5_TRACE:-/dev/null}" "$dir/client-trace.log" 2>/dev/null || true
         cp -f "$testdir/kdc-trace.log" "$dir/kdc-trace.log" 2>/dev/null || true
+        # The PKCS#11 API call sequence the plugin made, from the spy log:
+        # the crypto-auditing feed for the token-backed flow.
+        if [[ -n "$spy_log" ]]; then
+            python3 "$SCRIPT_DIR/pkcs11_sequence.py" "$spy_log" \
+                > "$dir/pkcs11_sequence.txt" 2>&1 || true
+        fi
         local fp
         fp="$(ca_fingerprint "${PKINIT_CA_CERT:-}")"
         printf 'ca_fingerprint=%s\n' "$fp" >> "$dir/meta.env"
@@ -266,6 +369,22 @@ Client sends the authenticated AS-REQ with its ML-DSA-65 client certificate
 KDC reply validates against the newly-pinned post-quantum CA; kinit succeeds
 EOF
             ;;
+        pq-token-flow)
+            cat <<'EOF'
+KDC setup generates the client's ML-DSA-65 key inside the kryoptic token
+(openssl genpkey through the pkcs11 provider), issues a client certificate
+for it with this run's CA, and imports it onto the token
+Client sends anonymous AS-REQ (WELLKNOWN/ANONYMOUS) for FAST armor
+KDC replies with its ML-DSA-65-signed certificate and issuing CA
+Client consults the broker; broker approves and pins the post-quantum CA
+Client sends the authenticated AS-REQ; the plugin loads the identity from
+the token (C_Login, C_FindObjects/C_GetAttributeValue) and the authPack is
+signed by C_SignInit/C_Sign with CKM_ML_DSA, inside the token
+KDC reply validates against the pinned CA; kinit succeeds
+The PKCS#11 API sequence block is the plugin's exact Cryptoki call order,
+captured by the OpenSC pkcs11-spy (crypto-auditing feed)
+EOF
+            ;;
         *) echo "(no timeline)";;
     esac
 }
@@ -277,6 +396,30 @@ run_scenario denial        "Broker denies (fail closed)"                        
 run_scenario mitm          "Changed CA detected (MITM)"                          failure approve seed
 run_scenario pq-happy-path "Trust on first use with a post-quantum CA (ML-DSA-65)" success approve "" mldsa65
 run_scenario pq-tty-1day   "Post-quantum CA, confirmed on the client's tty (1 day)" success interactive "" mldsa65 3
+
+if token_flow_supported && provision_kryoptic_token >/dev/null 2>&1; then
+    run_scenario pq-token-flow "Post-quantum client identity on a kryoptic token (ML-DSA-65, PKCS#11 audit)" \
+        success approve "" mldsa65 "" "$TOKEN_URI"
+else
+    # Not a failure: the runner simply lacks the PKCS#11 stack (kryoptic,
+    # pkcs11-provider, opensc's spy + pkcs11-tool). Recorded as a skipped
+    # scenario so it shows up in the report instead of silently missing.
+    SKIP=$((SKIP + 1))
+    local_dir="$REPORTDIR/pq-token-flow"
+    mkdir -p "$local_dir"
+    {
+        printf 'name=%s\n' pq-token-flow
+        printf 'title=%s\n' "Post-quantum client identity on a kryoptic token (ML-DSA-65, PKCS#11 audit)"
+        printf 'expected=%s\n' skipped
+        printf 'outcome=%s\n' skipped
+        printf 'broker_mode=%s\n' n/a
+        printf 'broker_decision=%s\n' "(not run)"
+    } > "$local_dir/meta.env"
+    echo "PKCS#11 token stack unavailable (kryoptic / pkcs11-provider / opensc)" \
+        > "$local_dir/steps.txt"
+    echo
+    echo "=== Scenario: pq-token-flow -- SKIPPED (PKCS#11 token stack unavailable) ==="
+fi
 
 # -- Render the report --
 
@@ -294,5 +437,9 @@ fi
 
 echo
 echo "TOFU report: $REPORT_HTML"
-echo "Scenarios: $PASS passed, $FAIL failed"
+if [[ "$SKIP" -gt 0 ]]; then
+    echo "Scenarios: $PASS passed, $FAIL failed, $SKIP skipped"
+else
+    echo "Scenarios: $PASS passed, $FAIL failed"
+fi
 [[ "$FAIL" -eq 0 ]]
