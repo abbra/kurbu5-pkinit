@@ -446,6 +446,13 @@ Options:
                             pkcs11-module-path in the generated OpenSSL
                             config. Defaults to the system p11-kit proxy when
                             present.
+  --pkcs11-spy              Token mode: wrap the PKCS#11 module in the
+                            OpenSC PKCS#11 spy and record every PKCS#11 API
+                            call the client plugin makes to an audit log
+                            (printed when the playground exits). Requires
+                            opensc. This is the crypto-auditing source for
+                            the PKCS#11 traffic: the agent's USDT probes
+                            don't cover pkcs11-provider/kryoptic yet.
 
 See docs/local-ci.md for a walkthrough of the playground.
 
@@ -461,6 +468,8 @@ Examples:
   $(basename "$0") interactive --ui tty
   $(basename "$0") interactive --token "pkcs11:token=MyToken;object=mykey;type=private?pin-value=1234"
                                     # client identity from a PKCS#11 token
+  $(basename "$0") interactive --token "pkcs11:token=MyToken;object=mykey;type=private?pin-value=1234" --pkcs11-spy
+                                    # ... and audit the PKCS#11 API calls
 EOF
 }
 
@@ -473,7 +482,7 @@ run_interactive_playground() {
 
     local key_type="ec:P-256" pqc_min="ML-KEM-768" realm="PKINIT.TEST" principal="user" \
           realm_explicit=0 principal_explicit=0 tofu=1 ui="auto" \
-          token="" client_ca="" pkcs11_module=""
+          token="" client_ca="" pkcs11_module="" pkcs11_spy=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --key-type) key_type="$2"; shift 2 ;;
@@ -485,6 +494,7 @@ run_interactive_playground() {
             --token) token="$2"; shift 2 ;;
             --client-ca) client_ca="$2"; shift 2 ;;
             --pkcs11-module) pkcs11_module="$2"; shift 2 ;;
+            --pkcs11-spy) pkcs11_spy=1; shift ;;
             --help|-h) print_interactive_help; return 0 ;;
             *) echo "interactive: unknown option: $1" >&2; print_interactive_help; return 2 ;;
         esac
@@ -492,6 +502,10 @@ run_interactive_playground() {
 
     if [[ -n "$token" && "$token" != pkcs11:* ]]; then
         fail "--token must be a pkcs11: URI (got: $token)"
+        return 1
+    fi
+    if [[ -n "$pkcs11_spy" && -z "$token" ]]; then
+        fail "--pkcs11-spy requires --token"
         return 1
     fi
 
@@ -520,6 +534,10 @@ run_interactive_playground() {
         echo "Tearing down playground…"
         [[ -n "$setup_pid" ]] && { kill "$setup_pid" 2>/dev/null || true; wait "$setup_pid" 2>/dev/null || true; }
         [[ -n "$broker_pid" ]] && { kill "$broker_pid" 2>/dev/null || true; wait "$broker_pid" 2>/dev/null || true; }
+        if [[ -n "${spy_log:-}" ]]; then
+            echo "PKCS#11 API audit (crypto-auditing): $spy_log"
+            [[ -s "$spy_log" ]] || echo "  (empty: no kinit ran through the token)"
+        fi
         [[ -n "$work" ]] && rm -rf "$work"
     }
     trap playground_cleanup INT TERM
@@ -529,6 +547,12 @@ run_interactive_playground() {
     local env_file="$testdir/env.sh"
     local sock="$work/trust.sock"
     local state="$work/trust.state.json"
+    # The audit log lives outside the playground work dir: it survives
+    # teardown, and the path is printed when the playground exits.
+    local spy_log=""
+    if [[ -n "$pkcs11_spy" ]]; then
+        spy_log="$(mktemp /tmp/pkinit-pkcs11-spy.XXXXXXXXXX.log)"
+    fi
 
     local setup_args=(
         --testdir "$testdir"
@@ -543,6 +567,7 @@ run_interactive_playground() {
         setup_args+=(--client-token "$token")
         [[ -n "$client_ca" ]] && setup_args+=(--client-ca "$client_ca")
         [[ -n "$pkcs11_module" ]] && setup_args+=(--pkcs11-module "$pkcs11_module")
+        [[ -n "$spy_log" ]] && setup_args+=(--pkcs11-spy "$spy_log")
     else
         setup_args+=(--realm "$realm" --principal "$principal")
     fi
@@ -608,6 +633,7 @@ run_interactive_playground() {
     echo "  KDC socket:     $PKINIT_KDC_SOCKET"
     if [[ -n "$token" ]]; then
         echo "  client identity: PKCS#11 token (${token%%\?*})"
+        [[ -n "$spy_log" ]] && echo "  PKCS#11 audit:  $spy_log (--pkcs11-spy; see it after exit)"
         echo "  cert algorithm:   $key_type (CA/KDC cert signing; client cert is on the token)"
     else
         echo "  cert algorithm: $key_type (CA/KDC/client cert signing -- independent of key exchange below)"
