@@ -31,6 +31,13 @@ env:
   # and python3 to drive tests/system/pkinit/setup.py.
   SYSTEM_TEST_PACKAGES: >-
     krb5-server krb5-workstation krb5-pkinit openssl python3
+  # Extra packages for the TOFU job's pq-token-flow scenario: a local
+  # software PKCS#11 token (kryoptic), the OpenSSL pkcs11-provider that
+  # loads it, and opensc for pkcs11-tool (provisioning) plus the
+  # pkcs11-spy audit module. Without them that one scenario reports
+  # itself skipped instead of running.
+  TOFU_TEST_PACKAGES: >-
+    kryoptic pkcs11-provider opensc
 
 jobs:
   # ── Build ──────────────────────────────────────────────────────────────────
@@ -210,7 +217,9 @@ jobs:
 
   # ── TOFU test ──────────────────────────────────────────────────────────────
   # Exercises the KDC-CA trust-on-first-use flow (anonymous probe → broker
-  # approval/denial → pin) across happy-path, fail-closed, and MITM scenarios.
+  # approval/denial → pin) across happy-path, fail-closed, and MITM scenarios,
+  # plus a post-quantum client identity held on a kryoptic PKCS#11 token; the
+  # report carries the PKCS#11 API call sequence that flow makes.
   # tofu.sh writes its report directly to GITHUB_STEP_SUMMARY (an env var the
   # runner already sets for every step), so it's visible on this run's Summary
   # tab without downloading anything; the uploaded HTML artifact remains for
@@ -222,7 +231,7 @@ jobs:
     container: quay.io/fedora/fedora:latest
     steps:
       - name: Install native dependencies
-        run: dnf install -y $DNF_PACKAGES $SYSTEM_TEST_PACKAGES
+        run: dnf install -y $DNF_PACKAGES $SYSTEM_TEST_PACKAGES $TOFU_TEST_PACKAGES
       - uses: actions/checkout@v7
       - name: Restore cargo registry cache
         uses: actions/cache@v6
