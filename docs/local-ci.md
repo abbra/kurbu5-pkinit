@@ -20,6 +20,7 @@ top-level [README](../README.md).
   - [Inside the playground shell](#inside-the-playground-shell)
   - [Recipes](#recipes)
   - [Client identity on a PKCS#11 token](#client-identity-on-a-pkcs11-token)
+  - [PKCS#11 API audit (crypto-auditing)](#pkcs11-api-audit-crypto-auditing)
   - [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
@@ -200,6 +201,7 @@ How the client trusts the KDC depends on the mode:
 | `--token URI` | unset | Use a certificate and key on a PKCS#11 token as the client identity. See [below](#client-identity-on-a-pkcs11-token). |
 | `--client-ca FILE` | issuer found on the token | PEM of the CA that issued the token certificate. Token mode only. |
 | `--pkcs11-module FILE` | p11-kit proxy | PKCS#11 module to load through the OpenSSL pkcs11-provider. Token mode only. |
+| `--pkcs11-spy` | off | Record every PKCS#11 API call the client plugin makes to an audit log. Token mode only; requires `opensc`. See [PKCS#11 API audit](#pkcs11-api-audit-crypto-auditing). |
 
 The key exchange is post-quantum by default, whatever certificates
 `--key-type` produces: RSA and ECDSA certificates still get an ML-KEM
@@ -222,6 +224,7 @@ The environment file exports:
 | `PKINIT_KDC_SOCKET` | the UNIX socket the KDC listens on |
 | `PKINIT_CLIENT_CERT`, `PKINIT_CLIENT_KEY` | the generated client certificate and key (file mode) |
 | `PKINIT_CLIENT_IDENTITY`, `OPENSSL_CONF` | the token URI and the OpenSSL config that loads the pkcs11-provider (token mode) |
+| `PKCS11SPY`, `PKCS11SPY_OUTPUT` | the real PKCS#11 module the spy wraps, and the audit log it writes (`--pkcs11-spy`) |
 | `SETUP_PID` | PID of the `setup.py` process that owns the KDC |
 
 The test directory is the parent of `$KRB5_CONFIG`
@@ -351,6 +354,46 @@ temporary work directory, which is deleted on exit.
 
 The KDC's own certificates are still generated with `--key-type`. The token
 certificate's algorithm is whatever is on the token.
+
+### PKCS#11 API audit (crypto-auditing)
+
+With `--pkcs11-spy` (token mode), the pkcs11-provider's module path points at
+the OpenSC **PKCS#11 spy** (`pkcs11-spy.so`, from the `opensc` package)
+instead of directly at the token module. The spy is a pass-through PKCS#11
+module: it `dlopen`s the real module (named by `$PKCS11SPY`) and writes every
+Cryptoki call it forwards — name, arguments, and return value — to
+`$PKCS11SPY_OUTPUT`. That gives a complete list of the PKCS#11 API calls the
+kurbu5-pkinit client plugin makes during the session: the `C_Login`,
+`C_FindObjects*`, `C_Sign`, and mechanism discovery behind a token-backed
+`kinit`.
+
+```sh
+./contrib/ci/local-ci.sh interactive \
+    --token "pkcs11:token=MyToken;object=mykey;type=private?pin-value=1234" \
+    --pkcs11-module /usr/lib64/pkcs11/libkryoptic_pkcs11.so --pkcs11-spy
+# inside the playground:
+kinit $PKINIT_PRINCIPAL@$PKINIT_REALM
+# on exit, the teardown prints the audit log path, e.g.:
+grep -E '^[0-9]+: C_' /tmp/pkinit-pkcs11-spy.*.log
+```
+
+The log lives outside the playground temp directory and survives teardown.
+setup.py's own `storeutl` probing calls go to `/dev/null`, so the log holds
+only what the plugin does at runtime — from `C_Initialize` through the
+`C_Sign` of the PKINIT `authPack` (the signature operation happens inside
+`kinit`, after setup has finished).
+
+Why the spy rather than the crypto-auditing agent:
+[crypto-auditing](https://github.com/latchset/crypto-auditing) collects USDT
+probe events from instrumented libraries (`crau-agent` + `crau-query`), but
+neither the OpenSSL pkcs11-provider nor kryoptic carries those probes yet, so
+the agent has no PKCS#11 event source to attach to. The spy log is the
+PKCS#11 audit feed today; if upstream gains probes, point `crau-agent
+--library` at them and drop the wrapper.
+
+Note: the spy serializes the call stream in one file; if you run `kinit`
+twice, both sessions append to the same log (the plugin initializes the
+module per process).
 
 ### Troubleshooting
 
