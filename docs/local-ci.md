@@ -35,6 +35,7 @@ The script needs bash 4 or later and checks for its tools at startup, printing
 | `krb5kdc`, `kinit`, `kadmin.local` (MIT krb5 1.22 or later) | `system-test`, `tofu-test`, `interactive` (Fedora: `krb5-server`, `krb5-workstation`) |
 | `openssl` | `system-test`, `tofu-test`, `interactive` |
 | `python3` | `system-test`, `tofu-test`, `interactive` |
+| `kryoptic`, `pkcs11-provider`, `opensc` | only `tofu-test`'s `pq-token-flow` scenario; without them that scenario reports itself skipped |
 | `valgrind` | `--valgrind` only |
 | `actionlint` (or `yamllint` as a fallback) | `lint-workflows`; skipped with a warning if neither is installed |
 
@@ -61,7 +62,7 @@ Token mode in the playground has extra requirements; see
 | `doc` | `cargo doc --workspace --no-deps --all-features`, with `RUSTDOCFLAGS=-D warnings` | `build` |
 | `test` | `cargo test --workspace --all-features` | `build` |
 | `system-test` | `tests/system/pkinit/run.sh`: `kinit` against an ephemeral KDC, cross-tested with MIT's `pkinit.so` (us-us, us-mit, mit-us, mit-mit). us-us uses an ML-KEM-768 key exchange; the combos involving MIT use classic DH/ECDH, which is all MIT's `pkinit.so` supports. A second pass has our client offer ML-KEM to MIT's KDC without `pkinit_require_kem`, which must end in a fallback to DH/ECDH after error 65 | `build` |
-| `tofu-test` | `tests/system/pkinit/tofu.sh`: KDC-CA trust-on-first-use scenarios (happy path, denial, MITM, ML-DSA chain, tty prompt), with an HTML report | `build` |
+| `tofu-test` | `tests/system/pkinit/tofu.sh`: KDC-CA trust-on-first-use scenarios (happy path, denial, MITM, ML-DSA chain, tty prompt, ML-DSA client on a kryoptic token), with an HTML report | `build` |
 | `interop-mit-pqc` | Opt-in, not run by `all`: ML-KEM interop against the MIT implementation of the draft, see [below](#interop-with-the-mit-implementation-of-the-draft) | `build` |
 
 Dependencies mirror the workflow's `needs:` fields. When you ask for a job
@@ -390,6 +391,18 @@ neither the OpenSSL pkcs11-provider nor kryoptic carries those probes yet, so
 the agent has no PKCS#11 event source to attach to. The spy log is the
 PKCS#11 audit feed today; if upstream gains probes, point `crau-agent
 --library` at them and drop the wrapper.
+
+The same feed runs in CI: the `tofu-test` job's `pq-token-flow` scenario does
+a token-backed ML-DSA-65 `kinit` through the spy, and `pkcs11_sequence.py`
+turns the log into a compact call sequence (repeats folded, `C_FindObjectsInit`
+annotated with the object it searched, `C_SignInit`/`C_VerifyInit` with the
+mechanism) attached to that scenario in both the HTML report and the GitHub
+step summary. The scenario provisions its own identity through `setup.py`'s
+`--client-token-generate` (not offered in the playground): the key is
+generated inside the token by `--key-type`, the certificate issued by the test
+CA and imported under the key's object label, so the flow needs no
+pre-provisioned token. The scenario reports itself skipped where the PKCS#11
+stack is not installed.
 
 Note: the spy serializes the call stream in one file; if you run `kinit`
 twice, both sessions append to the same log (the plugin initializes the
