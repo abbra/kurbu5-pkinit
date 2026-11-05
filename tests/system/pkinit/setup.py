@@ -255,7 +255,7 @@ class PkinitRealm:
                  pqc_min_algorithm=DEFAULT_PQC_MIN_ALGORITHM,
                  tofu_broker=None, client_token=None, client_ca=None,
                  pkcs11_module=None, krb5_prefix=None, require_kem=True,
-                 pkcs11_spy=None):
+                 pkcs11_spy=None, client_token_generate=False):
         # realm/principal are None by default so token mode can override them
         # with values derived from the token certificate's KRB5 SAN before
         # any config is written.
@@ -290,6 +290,11 @@ class PkinitRealm:
         # Cryptoki call to this file (crypto-auditing source for the
         # PKINIT module's token calls; see PKCS11_SPY_PATHS).
         self.pkcs11_spy_log = os.path.abspath(pkcs11_spy) if pkcs11_spy else None
+        # Token mode, --client-token-generate: the identity (key + cert) is
+        # provisioned onto the token by this script instead of required to
+        # be there already. Only meaningful with --client-token.
+        self.client_token_generate = client_token_generate
+        self._pki_generated = False
         self.token_principal = None
         self.token_realm = None
         if client_token:
@@ -478,15 +483,24 @@ class PkinitRealm:
             lines.append("")
             with open(self.openssl_conf, "w") as f:
                 f.write("\n".join(lines))
-            if not module:
-                print(
-                    "[setup] warning: no PKCS#11 module found (no p11-kit-proxy); "
-                    "pass --pkcs11-module to pin one",
-                    file=sys.stderr,
-                )
 
         env = os.environ.copy()
         env["OPENSSL_CONF"] = self.openssl_conf
+
+        if self.client_token_generate:
+            # Nothing to discover: the key, the certificate (written straight
+            # to client_token_leaf) and its anchor are all created here, and
+            # the principal and realm are the ones just passed on the command
+            # line. So this mode needs no certificate parsing at all.
+            self._generate_pki()
+            self._provision_client_token_identity(env)
+            # The anchor is the test CA itself -- the same file the KDC
+            # already uses as its primary anchor, so the second
+            # pkinit_anchors entry and the token stay consistent.
+            self.client_token_anchor = self.ca_cert
+            self.token_principal, self.token_realm = self.principal, self.realm
+            return
+
         synta, _gn, _kp = _synta()
 
         # Leaf: the certificate bound to the key object (the plugin's
@@ -546,7 +560,164 @@ class PkinitRealm:
                 + "\n"
             )
 
+    # -- Token identity provisioning (--client-token-generate) --
+
+    def _token_attrs(self):
+        """The (token label, object label, pin) named by --client-token."""
+        path, _, query = self.client_token.partition("?")
+        path = path[len("pkcs11:"):] if path.startswith("pkcs11:") else path
+        attrs = {
+            c.split("=", 1)[0]: c.split("=", 1)[1]
+            for c in path.split(";") if "=" in c
+        }
+        pin = ""
+        for part in query.split("&"):
+            if part.startswith("pin-value="):
+                pin = part[len("pin-value="):]
+        return attrs.get("token", ""), attrs.get("object", ""), pin
+
+    def _pkcs11_tool(self, *args):
+        """pkcs11-tool against the real PKCS#11 module (never the spy)."""
+        module = self.pkcs11_module or first_existing(PKCS11_MODULE_PATHS)
+        if not module:
+            raise RuntimeError(
+                "--client-token-generate needs a PKCS#11 module to import "
+                "into; pass --pkcs11-module"
+            )
+        result = subprocess.run(
+            ["pkcs11-tool", "--module", module, *args],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"pkcs11-tool {args[0]} failed:\n{result.stderr}"
+            )
+        return result.stdout
+
+    def _gen_token_key(self, env):
+        """Generate the client's private key inside the token, by the
+        configured --key-type. EC goes through pkcs11-tool --keypairgen;
+        ML-DSA through the pkcs11 provider's genpkey -- the recipe of
+        pkinit-core/tests/pkcs11_protocol.rs, where genpkey exits non-zero
+        even on success because the token key is not exportable, so the
+        public key is read back to confirm the key exists."""
+        token, obj, pin = self._token_attrs()
+        key_uri = f"pkcs11:token={token};object={obj};type=private?pin-value={pin}"
+        if self.key_type in ("ec:P-256", "ec:P-384", "ec:P-521"):
+            curve = {"ec:P-256": "prime256v1", "ec:P-384": "secp384r1",
+                     "ec:P-521": "secp521r1"}[self.key_type]
+            self._pkcs11_tool(
+                "--keypairgen", "--key-type", f"EC:{curve}",
+                "--label", obj, "--usage-sign",
+                "--token-label", token, "--pin", pin,
+            )
+        elif self.key_type in ("mldsa44", "mldsa65", "mldsa87"):
+            param = {"mldsa44": "ML-DSA-44", "mldsa65": "ML-DSA-65",
+                     "mldsa87": "ML-DSA-87"}[self.key_type]
+            gen_uri = f"pkcs11:token={token};object={obj}?pin-value={pin}"
+            subprocess.run(
+                ["openssl", "genpkey",
+                 "-provider", "pkcs11", "-provider", "default",
+                 "-propquery", "?provider=pkcs11",
+                 "-algorithm", param,
+                 "-pkeyopt", f"pkcs11_uri:{gen_uri}"],
+                env=env, capture_output=True, text=True,
+            )  # non-zero exit on success: the token key is not exportable
+            # Confirm the key exists by reading its public half back; a
+            # missing key fails here with the provider's own error.
+            self._run_openssl("pkey", "-pubout", "-in", key_uri, env=env)
+        else:
+            raise RuntimeError(
+                "--client-token-generate supports the ec:* and mldsa* key "
+                f"types (got {self.key_type})"
+            )
+        return key_uri
+
+    def _provision_client_token_identity(self, env):
+        """Put the client identity on the token: a token-resident private key
+        (``_gen_token_key``) and a certificate for it issued by this test's
+        own CA with the standard PKINIT client extensions. The certificate is
+        imported under the key's object label, and the CA certificate onto the
+        token as well under its own label, so the existing leaf/anchor
+        extraction in load_client_token_identity() finds both from the token
+        exactly as it would for a pre-provisioned token.
+
+        Mirrors pkinit-core/tests/pkcs11_protocol.rs (generate the key inside
+        the token, export only the public half, import the certificate with
+        pkcs11-tool --write-object) -- here reusing setup.py's CA so the KDC
+        anchors and --client-ca handling stay untouched.
+        """
+        token, obj, pin = self._token_attrs()
+        if not token or not obj:
+            raise RuntimeError(
+                "--client-token-generate needs token= and object= in the "
+                f"--client-token URI (got {redact_pkcs11_uri(self.client_token)})"
+            )
+        key_uri = self._gen_token_key(env)
+
+        # CSR signed by the token key: only the token can sign it.
+        csr = os.path.join(self.certs_dir, "client-token.csr")
+        self._run_openssl("req", "-new", "-key", key_uri,
+                          "-subj", f"/CN={self.principal}",
+                          "-out", csr, env=env)
+
+        # Issue it with the test CA, same extensions as the file-mode client
+        # cert (PKINIT client EKU + KRB5 otherName SAN).
+        client_ext_cnf = os.path.join(self.certs_dir, "client-ext.cnf")
+        with open(client_ext_cnf, "w") as f:
+            f.write(self._client_ext_text())
+        self._run_openssl(
+            "x509", "-req", "-in", csr,
+            "-CA", self.ca_cert, "-CAkey", self.ca_key,
+            "-CAcreateserial", "-out", self.client_token_leaf,
+            "-days", "1",
+            "-extfile", client_ext_cnf, "-extensions", "client_exts",
+            env=env,
+        )
+
+        # Import the certificate under the key's label, so the plugin's
+        # identity URI (type=cert under the same object) finds it -- the
+        # same pairing pkinit-core/tests/pkcs11_protocol.rs sets up. The CA
+        # stays off the token: the KDC anchors on the CA file directly.
+        self._pkcs11_tool(
+            "--write-object", self.client_token_leaf, "--type", "cert",
+            "--label", obj, "--login", "--token-label", token, "--pin", pin,
+        )
+        print(
+            f"[setup] token identity provisioned: {self.key_type} key "
+            f"{obj!r} on {token!r}, certificate issued by the test CA",
+            file=sys.stderr,
+        )
+
     # -- PKI generation --
+
+    def _client_ext_text(self):
+        """openssl -extfile text for the PKINIT client certificate. Shared by
+        file mode and token-generate mode: same PKINIT client EKU, same KRB5
+        otherName SAN for this realm's principal."""
+        return textwrap.dedent(f"""\
+            [client_exts]
+            basicConstraints = CA:FALSE
+            keyUsage = digitalSignature
+            extendedKeyUsage = 1.3.6.1.5.2.3.4
+            subjectKeyIdentifier = hash
+            authorityKeyIdentifier = keyid,issuer
+            subjectAltName = @client_san
+
+            [client_san]
+            otherName = 1.3.6.1.5.2.2;SEQUENCE:krb5princ_client
+
+            [krb5princ_client]
+            realm = EXPLICIT:0,GeneralString:{self.realm}
+            princ = EXPLICIT:1,SEQUENCE:princ_client
+
+            [princ_client]
+            nametype = EXPLICIT:0,INTEGER:1
+            components = EXPLICIT:1,SEQUENCE:components_client
+
+            [components_client]
+            component = GeneralString:{self.principal}
+        """)
 
     def _newkey_args(self):
         """Return openssl -newkey and -pkeyopt arguments for the configured key type."""
@@ -560,6 +731,12 @@ class PkinitRealm:
         return self.key_type.startswith("mldsa")
 
     def _generate_pki(self):
+        # Token-generate mode issues the client certificate against this CA
+        # before create_db() reaches _generate_pki(); the flag keeps the CA
+        # that certificate was signed by from being regenerated.
+        if self._pki_generated:
+            return
+        self._pki_generated = True
         os.makedirs(self.certs_dir, exist_ok=True)
         newkey = self._newkey_args()
 
@@ -621,29 +798,7 @@ class PkinitRealm:
             # never extracted to files).
             client_ext_cnf = os.path.join(self.certs_dir, "client-ext.cnf")
             with open(client_ext_cnf, "w") as f:
-                f.write(textwrap.dedent(f"""\
-                    [client_exts]
-                    basicConstraints = CA:FALSE
-                    keyUsage = digitalSignature
-                    extendedKeyUsage = 1.3.6.1.5.2.3.4
-                    subjectKeyIdentifier = hash
-                    authorityKeyIdentifier = keyid,issuer
-                    subjectAltName = @client_san
-
-                    [client_san]
-                    otherName = 1.3.6.1.5.2.2;SEQUENCE:krb5princ_client
-
-                    [krb5princ_client]
-                    realm = EXPLICIT:0,GeneralString:{self.realm}
-                    princ = EXPLICIT:1,SEQUENCE:princ_client
-
-                    [princ_client]
-                    nametype = EXPLICIT:0,INTEGER:1
-                    components = EXPLICIT:1,SEQUENCE:components_client
-
-                    [components_client]
-                    component = GeneralString:{self.principal}
-                """))
+                f.write(self._client_ext_text())
 
             client_csr = os.path.join(self.certs_dir, "client.csr")
             self._run_openssl(
@@ -827,9 +982,10 @@ class PkinitRealm:
         """)
 
         kdc_anchor_line = f"FILE:{self.ca_cert}"
-        if self.client_token:
+        if self.client_token and self.client_token_anchor != self.ca_cert:
             # The KDC must trust the client cert's issuing CA in addition to
             # the test-realm CA (the profile reader accepts repeated keys).
+            # In generate mode the anchor IS the test CA, so no second entry.
             kdc_anchor_line += (
                 f"\n                    pkinit_anchors = FILE:{self.client_token_anchor}"
             )
@@ -1035,6 +1191,15 @@ def main():
                              "OpenSC spy proxy and record every PKCS#11 API "
                              "call made by the client plugin to FILE "
                              "(crypto-auditing source; requires opensc)")
+    parser.add_argument("--client-token-generate", action="store_true",
+                        help="Token mode: provision the identity on the token "
+                             "instead of requiring one there already. The "
+                             "private key is generated inside the token with "
+                             "the --key-type algorithm (via the pkcs11 "
+                             "provider), the certificate is issued by this "
+                             "test's CA with the usual PKINIT client "
+                             "extensions, and both are imported onto the "
+                             "token (the CA certificate as the anchor).")
     args = parser.parse_args()
 
     kdc_so = args.kdc_plugin_so or args.plugin_so
@@ -1058,7 +1223,18 @@ def main():
         krb5_prefix=args.krb5_prefix,
         require_kem=args.require_kem,
         pkcs11_spy=args.pkcs11_spy,
+        client_token_generate=args.client_token_generate,
     )
+    if args.client_token_generate:
+        if not args.client_token:
+            parser.error("--client-token-generate requires --client-token")
+        # The generated certificate's KRB5 SAN comes from these, so they
+        # cannot be derived from a certificate that does not exist yet.
+        if not args.realm or not args.principal:
+            parser.error(
+                "--client-token-generate requires explicit --realm and "
+                "--principal (the SAN of the certificate to be issued)"
+            )
     if realm.client_token:
         realm.load_client_token_identity()
         if args.realm is None:
